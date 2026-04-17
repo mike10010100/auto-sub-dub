@@ -17,13 +17,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Silence SpeechBrain noise
+logging.getLogger("speechbrain").setLevel(logging.ERROR)
+
 from src.audio_processor import AudioProcessor
 from src.transcriber import Transcriber
 from src.translator import Translator
 from src.synthesizer import Synthesizer
 from src.utils import get_device
 
-def main(video_path, target_lang="Spanish", hf_token=None, device=None):
+def main(video_path, target_lang="Spanish", hf_token=None, device=None, ollama_url=None, ollama_model=None):
     # 1. Initialize components
     video_name = Path(video_path).stem
     project_dir = Path("output") / video_name
@@ -39,12 +42,12 @@ def main(video_path, target_lang="Spanish", hf_token=None, device=None):
     device = device or get_device()
     logger.info(f"Using device: {device}")
 
-    # Priority: CLI argument > .env environment variable
+    # Priority: argument > .env environment variable
     hf_token = hf_token or os.getenv("HF_TOKEN")
     
     audio_proc = AudioProcessor(output_dir=project_dir)
     transcriber = Transcriber(device=device, hf_token=hf_token)
-    translator = Translator()
+    translator = Translator(ollama_url=ollama_url, model=ollama_model)
     synthesizer = Synthesizer(output_dir=audio_segments_dir, device=device)
     
     # 2. Process Audio
@@ -175,6 +178,15 @@ if __name__ == "__main__":
     parser.add_argument("--lang", default="Spanish", help="Target language for translation")
     parser.add_argument("--hf_token", help="Hugging Face token for diarization")
     parser.add_argument("--device", help="Device to use (cuda, mps, cpu)")
+    parser.add_argument("--ollama_url", help="Ollama instance URL")
+    parser.add_argument("--ollama_model", help="Ollama model name")
     
     args = parser.parse_args()
-    main(args.video, target_lang=args.lang, hf_token=args.hf_token, device=args.device)
+    main(
+        args.video, 
+        target_lang=args.lang, 
+        hf_token=args.hf_token, 
+        device=args.device,
+        ollama_url=args.ollama_url,
+        ollama_model=args.ollama_model
+    )

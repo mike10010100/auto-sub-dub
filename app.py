@@ -4,6 +4,11 @@ from pathlib import Path
 import main as pipeline
 import json
 from src.utils import get_device
+import logging
+
+# Silence SpeechBrain noise
+logging.getLogger("speechbrain").setLevel(logging.ERROR)
+logging.getLogger("speechbrain.utils.importutils").setLevel(logging.ERROR)
 
 st.set_page_config(page_title="Auto-Dub AI", layout="wide")
 
@@ -30,11 +35,27 @@ with st.sidebar:
     auto_device = get_device()
     device = st.selectbox("Processing Device", ["cuda", "mps", "cpu"], index=["cuda", "mps", "cpu"].index(auto_device) if auto_device in ["cuda", "mps", "cpu"] else 2)
 
-    hf_token = st.text_input("Hugging Face Token (for Diarization)", value=os.getenv("HF_TOKEN", ""), type="password")
+    st.divider()
+    st.subheader("External Services")
+    hf_token = st.text_input("Hugging Face Token", value=os.getenv("HF_TOKEN", ""), type="password", help="Required for speaker diarization (WhisperX)")
+    
+    ollama_url = st.text_input("Ollama URL", value=os.getenv("OLLAMA_URL", "http://192.168.86.172:11434"), help="The address of your local or remote Ollama instance")
+    ollama_model = st.text_input("Ollama Model", value=os.getenv("OLLAMA_MODEL", "gemma4"), help="The model to use for translation")
+    
+    # Update environment variables for the pipeline call
+    os.environ["OLLAMA_URL"] = ollama_url
+    os.environ["OLLAMA_MODEL"] = ollama_model
     
     st.divider()
-    st.info(f"Detected optimal device: **{auto_device}**")
-    st.info("Ensure Ollama is running with the `gemma4` model pulled.")
+    st.info(f"Optimal hardware: **{auto_device.upper()}**")
+    
+    with st.expander("System Environment"):
+        st.code(f"""
+OS: {os.uname().sysname}
+Device: {device}
+Ollama: {ollama_url}
+Model: {ollama_model}
+        """.strip())
 
 # Main area
 uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "mkv", "mov", "avi"])
@@ -56,7 +77,14 @@ if uploaded_file is not None:
         try:
             with st.status("Dubbing in progress...", expanded=True) as status:
                 st.write(f"Step 1: Initializing components on {device}...")
-                pipeline.main(str(video_path), target_lang=target_lang, hf_token=hf_token, device=device)
+                pipeline.main(
+                    str(video_path), 
+                    target_lang=target_lang, 
+                    hf_token=hf_token, 
+                    device=device,
+                    ollama_url=ollama_url,
+                    ollama_model=ollama_model
+                )
                 
                 status.update(label="Dubbing complete!", state="complete", expanded=False)
             
