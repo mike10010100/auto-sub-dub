@@ -1,6 +1,11 @@
 import streamlit as st
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables early
+load_dotenv()
+
 import main as pipeline
 import json
 from src.utils import get_device

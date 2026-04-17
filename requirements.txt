@@ -17,3 +17,4 @@ setuptools
 tqdm
 streamlit
 watchdog
+python-dotenv
