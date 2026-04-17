@@ -5,10 +5,10 @@ Welcome, Agent. You are assisting in the development and maintenance of **Auto-D
 ## Project Architecture
 Auto-Dub is a modular Python application that performs the following steps:
 1.  **Vocal Isolation:** Uses Meta's **Demucs** to separate vocals from background music/noise.
-2.  **Transcription & Diarization:** Uses **WhisperX** (Whisper + Pyannote.audio) to generate timestamped text with speaker identities.
-3.  **Translation:** Calls a remote **Ollama** instance (running **Gemma 4**) via API.
-4.  **Voice Cloning & Synthesis:** Uses **Coqui XTTS v2** (native Python library) to clone original speakers' voices and generate the dubbed audio.
-5.  **Assembly:** Uses **pydub** for time-stretching/mixing and **FFmpeg** for final remuxing.
+2.  **Transcription & Diarization:** Uses **WhisperX** (Whisper + Pyannote.audio) to generate millisecond-accurate timestamps and speaker identities.
+3.  **Hybrid Multimodal Translation:** Calls a remote **Ollama** instance (running **Gemma 4 26B**). The agent sends the raw audio of each segment + transcript text to Gemma 4 to capture emotional prosody.
+4.  **Voice Cloning & Synthesis:** Uses **Coqui XTTS v2** (native Python library). It uses **Multi-Reference Triangulation** (3+ 6-12s clips) and **Emotion Conditioning** tags to match the original performance.
+5.  **Assembly:** Uses **pydub** for WSOLA time-stretching/mixing and **FFmpeg** for final remuxing.
 
 ## Development Environment
 - **Tool Manager:** [mise-en-place](https://mise.jdx.dev/). Use `mise run <task>` for common operations.
@@ -17,21 +17,17 @@ Auto-Dub is a modular Python application that performs the following steps:
 
 ## Key Files
 - `main.py`: The entry point and orchestrator.
-- `src/`: Contains modular logic for each phase of the pipeline.
-- `mise.toml`: Defines tools, tasks, and environment variables.
+- `src/translator.py`: Handles the Multimodal API calls to Ollama.
+- `src/synthesizer.py`: Handles multi-reference extraction and conditional synthesis.
+- `mise.toml`: Defines tools, tasks, and environment variables (including `COQUI_TOS_AGREED=1`).
 - `.env`: Stores sensitive credentials like `HF_TOKEN`. **Never commit this file.**
-- `AGENTS.md`: This file.
+- `PRD.md`: The single source of truth for project goals.
 
 ## Operational Guidelines
-- **Resiliency:** The pipeline supports checkpointing. It skips steps if it finds existing files in the `output/` directory (e.g., `transcript.json`, `vocals.wav`).
-- **Dependencies:** If adding new AI models, prioritize libraries that can run locally on Linux/WSL2 with CUDA support.
-- **Tooling:** Always check `requirements.txt` for pinned versions (especially `torch` and `torchaudio`) to avoid API breaking changes.
+- **Resiliency:** The pipeline supports checkpointing. It skips steps if it finds existing files in the `output/<video_name>/` directory.
+- **Thinking Mode:** When calling Gemma 4, always include `<|think|>` at the start of the system prompt and parse out the `<|channel>thought` blocks.
+- **Dependencies:** Always check `requirements.txt` for pinned versions (especially `torch`, `torchaudio`, and `ollama`).
 
 ## Task Execution
 - `mise run install`: Installs all dependencies.
 - `mise run run -- <video.mp4> --lang <Language>`: Executes the full pipeline.
-- `mise run test`: Runs a test of the synthesizer logic.
-
-## Remote Context
-- **Ollama Endpoint:** `http://192.168.86.172:11434` (Default). This is the only remote dependency.
-- **Hugging Face:** Requires `HF_TOKEN` for gated speaker diarization models.
