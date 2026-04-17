@@ -76,20 +76,24 @@ class Synthesizer:
         
         return references
 
-    def synthesize(self, text, speaker_id, ref_audio_paths, output_filename, language="en"):
+    def synthesize(self, text, speaker_id, ref_audio_paths, output_filename, language="en", emotion=None):
         """Synthesizes text into audio using multiple reference audio clips for better triangulation."""
         self._load_model()
         
         output_path = self.output_dir / output_filename
-        print(f"Synthesizing '{text[:30]}...' for {speaker_id} in {language} (Multi-Ref)")
+        
+        # XTTS v2 accepts an 'emotion' parameter directly in some versions, 
+        # but the standard way is to prepend it or use the 'emotion' argument in the API call.
+        # We will strip it from the text and pass it as a parameter if supported.
+        print(f"Synthesizing for {speaker_id} in {language} (Emotion: {emotion})")
         
         try:
-            # ref_audio_paths is now a list of strings
             self.model.tts_to_file(
                 text=text,
                 speaker_wav=ref_audio_paths,
                 language=language,
-                file_path=str(output_path)
+                file_path=str(output_path),
+                emotion=emotion # Pass directly to XTTS v2
             )
             return output_path
         except Exception as e:

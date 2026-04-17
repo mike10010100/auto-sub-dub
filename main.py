@@ -122,12 +122,18 @@ def main(video_path, target_lang="Spanish", hf_token=None):
         clip_name = f"segment_{i}_{speaker}.wav"
         clip_path = audio_segments_dir / clip_name
         
-        # Pass [EMOTION] tag to synthesizer if available
+        # Pass [EMOTION] tag as a separate parameter to synthesizer
         emotion_tag = segment.get("emotion", "[NEUTRAL]")
-        full_text = f"{emotion_tag} {text}"
+        # Ensure it has brackets and is uppercase
+        if not emotion_tag.startswith("["): emotion_tag = f"[{emotion_tag}"
+        if not emotion_tag.endswith("]"): emotion_tag = f"{emotion_tag}]"
+        emotion_tag = emotion_tag.upper()
+        
+        # Clean the tag out of the spoken text if LLM included it there
+        clean_text = text.replace(emotion_tag, "").strip()
         
         if not clip_path.exists():
-            clip_path = synthesizer.synthesize(full_text, speaker, references[speaker], clip_name, language=tts_lang)
+            clip_path = synthesizer.synthesize(clean_text, speaker, references[speaker], clip_name, language=tts_lang, emotion=emotion_tag)
         else:
             print(f"Skipping synthesis for segment {i}, using existing: {clip_path}")
         

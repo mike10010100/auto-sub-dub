@@ -1,3 +1,4 @@
+ollama
 TTS
 ffmpeg-python
 demucs
