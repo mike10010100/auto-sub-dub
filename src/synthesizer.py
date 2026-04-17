@@ -23,12 +23,11 @@ class Synthesizer:
             # We use XTTS v2 for expressive zero-shot voice cloning
             self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
 
-    def extract_speaker_references(self, vocals_path, transcript):
-        """Extracts a short audio sample for each unique speaker to use as a cloning reference."""
-        print(f"Extracting speaker references from {vocals_path}...")
+    def extract_speaker_references(self, vocals_path, transcript, target_duration=20):
+        """Extracts and concatenates high-quality audio samples for each speaker to use as cloning references."""
+        print(f"Extracting speaker references from {vocals_path} (Target: {target_duration}s)...")
         audio = AudioSegment.from_wav(vocals_path)
         
-        # Merge segments by speaker to get longer reference clips
         speaker_clips = {}
         for segment in transcript.get("segments", []):
             speaker = segment.get("speaker")
@@ -39,11 +38,14 @@ class Synthesizer:
                 speaker_clips[speaker] = []
             
             duration = segment["end"] - segment["start"]
-            # We want about 10 seconds of clear speech for a good reference
-            if 2 <= duration <= 30: # Use any decent segment
+            # We prioritize segments between 3 and 15 seconds for clear speech
+            if 3 <= duration <= 15:
                 start_ms = int(segment["start"] * 1000)
                 end_ms = int(segment["end"] * 1000)
-                speaker_clips[speaker].append(audio[start_ms:end_ms])
+                clip = audio[start_ms:end_ms]
+                # Filter out very quiet segments (noise/breathing)
+                if clip.dBFS > -40: 
+                    speaker_clips[speaker].append(clip)
         
         references = {}
         for speaker, clips in speaker_clips.items():
@@ -55,16 +57,20 @@ class Synthesizer:
 
             if not clips:
                 continue
-            # Combine the first few clips to reach ~10 seconds
+            
+            # Sort clips by duration (longest first) to get the most stable prosody
+            clips.sort(key=lambda x: len(x), reverse=True)
+            
             combined = clips[0]
             for clip in clips[1:]:
-                if combined.duration_seconds >= 10:
+                if combined.duration_seconds >= target_duration:
                     break
-                combined += clip
+                # Add a tiny 200ms crossfade between samples for smoothness
+                combined = combined.append(clip, crossfade=200)
             
             combined.export(ref_path, format="wav")
             references[speaker] = ref_path
-            print(f"Saved reference for {speaker} ({combined.duration_seconds:.1f}s) to {ref_path}")
+            print(f"Saved optimized reference for {speaker} ({combined.duration_seconds:.1f}s) to {ref_path}")
         
         return references
 
