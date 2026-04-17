@@ -35,11 +35,22 @@ Build a fully local, open-source pipeline that takes a video file, isolates voca
 1. Per-video project directories for output isolation.
 2. Automatic overlay mixing and `FFmpeg` remuxing.
 
-### Phase 5: Productionization (In Progress)
-1. **Sidechain Compression (Vocal Ducking):** Automatically lower background music volume when speech is active.
-2. **Web-Based Interface:** Build a **Streamlit** dashboard for drag-and-drop video processing and manual translation review.
-3. **Visual Lip-Syncing:** Integrate **Wav2Lip** or **LivePortrait** to re-animate mouths to match the new English audio.
-4. **Enterprise Logging:** Transition to structured logging and robust error handling for multi-hour video processing.
+### Phase 5: Productionization (Completed)
+1. **Sidechain Compression (Vocal Ducking):** Automatically lower background music volume when speech is active using `pydub`.
+2. **Web-Based Interface:** Built a **Streamlit** dashboard for drag-and-drop video processing and manual configuration.
+3. **Enterprise Logging:** Transitioned to structured logging and robust error handling across all modules.
+4. **Parallel Processing:** Concurrent Ollama API calls for significantly faster translation.
+
+### Phase 6: Cross-Platform & Stability (Completed)
+1. **Apple Silicon Support:** Hardware-agnostic device detection for CUDA, MPS, and CPU.
+2. **Mac-Specific Tuning:** Numerical stability fixes for XTTS v2 (CPU fallback) and WhisperX (float32 fallback).
+3. **Dependency Hardening:** Finalized a "Gold" `requirements.txt` that works on both ARM64 and x86_64.
+4. **Environment Awareness:** Explicit `.env` loading for seamless configuration.
+
+### Phase 7: Future Roadmap
+1. **Visual Lip-Syncing:** Integrate **Wav2Lip** or **LivePortrait** to re-animate mouths to match the new audio.
+2. **Batch Processing:** Ability to queue multiple videos in the web dashboard.
+3. **Translation Editor:** Interactive UI to manually override LLM translations before synthesis.
 
 ## Verification & Testing
 1. **Single-Speaker Test:** Verified with Spanish-to-English sample.

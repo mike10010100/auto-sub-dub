@@ -3,7 +3,8 @@
 A fully local, open-source pipeline for automatic video dubbing using AI. Now with support for **NVIDIA (CUDA)** and **Apple Silicon (MPS)**.
 
 ## Features
-- **Cross-Platform Acceleration:** Automatically detects and uses CUDA (NVIDIA) or MPS (Apple Silicon) for the heaviest tasks (Transcription, Synthesis).
+- **Cross-Platform Acceleration:** Automatically detects and uses CUDA (NVIDIA) or MPS (Apple Silicon).
+    - **Note:** For maximum quality and compatibility, the pipeline uses **CPU** for Synthesis and Transcription on Mac, while keeping isolation on the GPU.
 - **Vocal Isolation:** Separates vocals from background music/effects using Meta's **Demucs**.
 - **Transcription & Diarization:** High-precision transcription and speaker identification using **WhisperX**.
 - **Hybrid Multimodal Translation:** Context-aware and **emotion-aware** translation using **Gemma 4 (26B)** via a local Ollama instance. The model "listens" to the original audio to capture sarcasm and tone.
@@ -13,7 +14,7 @@ A fully local, open-source pipeline for automatic video dubbing using AI. Now wi
 
 ## Prerequisites
 1. **FFmpeg:** Ensure `ffmpeg` is installed on your system.
-2. **Ollama:** Ensure Ollama is running with the `gemma4` model pulled.
+2. **Ollama:** Ensure Ollama is running with the `gemma4:26b` model pulled.
 3. **macOS Build Tools:** If you are on a Mac, install the command line tools for better performance:
    ```bash
    xcode-select --install
@@ -21,7 +22,7 @@ A fully local, open-source pipeline for automatic video dubbing using AI. Now wi
 4. **Environment Setup:** 
    - Copy `.env.example` to `.env`.
    - Add your **Hugging Face Token** (required for speaker diarization).
-   - Configure your **Ollama URL** and **Model** if they differ from defaults.
+   - Configure your **Ollama URL** and **Model** (e.g., `gemma4:26b`) if they differ from defaults.
 
 ## Installation & Tool Management
 
