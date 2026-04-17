@@ -3,55 +3,84 @@ from pathlib import Path
 from pydub import AudioSegment
 from audiotsm import wsola
 from audiotsm.io.wav import WavReader, WavWriter
-import subprocess
 import tempfile
+import torch
+from TTS.api import TTS
 
 class Synthesizer:
-    def __init__(self, output_dir="output/audio_segments"):
+    def __init__(self, output_dir="output/audio_segments", device="cuda"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ref_audio_dir = Path("output/references")
         self.ref_audio_dir.mkdir(parents=True, exist_ok=True)
+        self.device = device if torch.cuda.is_available() else "cpu"
+        self.model = None
+
+    def _load_model(self):
+        """Lazy load the TTS model only when needed."""
+        if self.model is None:
+            print(f"Loading XTTS v2 model on {self.device}...")
+            # We use XTTS v2 for expressive zero-shot voice cloning
+            self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
 
     def extract_speaker_references(self, vocals_path, transcript):
         """Extracts a short audio sample for each unique speaker to use as a cloning reference."""
         print(f"Extracting speaker references from {vocals_path}...")
         audio = AudioSegment.from_wav(vocals_path)
         
-        speakers = set()
+        # Merge segments by speaker to get longer reference clips
+        speaker_clips = {}
         for segment in transcript.get("segments", []):
             speaker = segment.get("speaker")
-            if speaker and speaker not in speakers:
-                # Find a segment of decent length (e.g., 5-10 seconds)
-                duration = segment["end"] - segment["start"]
-                if 5 <= duration <= 15:
-                    start_ms = int(segment["start"] * 1000)
-                    end_ms = int(segment["end"] * 1000)
-                    ref_clip = audio[start_ms:end_ms]
-                    ref_path = self.ref_audio_dir / f"{speaker}_ref.wav"
-                    ref_clip.export(ref_path, format="wav")
-                    speakers.add(speaker)
-                    print(f"Saved reference for {speaker} to {ref_path}")
+            if not speaker:
+                continue
+            
+            if speaker not in speaker_clips:
+                speaker_clips[speaker] = []
+            
+            duration = segment["end"] - segment["start"]
+            # We want about 10 seconds of clear speech for a good reference
+            if 2 <= duration <= 30: # Use any decent segment
+                start_ms = int(segment["start"] * 1000)
+                end_ms = int(segment["end"] * 1000)
+                speaker_clips[speaker].append(audio[start_ms:end_ms])
         
-        return {s: self.ref_audio_dir / f"{s}_ref.wav" for s in speakers}
+        references = {}
+        for speaker, clips in speaker_clips.items():
+            if not clips:
+                continue
+            # Combine the first few clips to reach ~10 seconds
+            combined = clips[0]
+            for clip in clips[1:]:
+                if combined.duration_seconds >= 10:
+                    break
+                combined += clip
+            
+            ref_path = self.ref_audio_dir / f"{speaker}_ref.wav"
+            combined.export(ref_path, format="wav")
+            references[speaker] = ref_path
+            print(f"Saved reference for {speaker} ({combined.duration_seconds:.1f}s) to {ref_path}")
+        
+        return references
 
-    def synthesize(self, text, speaker_id, ref_audio_path, output_filename):
+    def synthesize(self, text, speaker_id, ref_audio_path, output_filename, language="en"):
         """Synthesizes text into audio using the specified speaker's reference audio."""
-        # This is a placeholder for the actual Fish Speech or XTTS call.
-        # For now, we'll use a subprocess call to a hypothetical Fish Speech CLI or API.
+        self._load_model()
         
         output_path = self.output_dir / output_filename
+        print(f"Synthesizing '{text[:30]}...' for {speaker_id} in {language}")
         
-        # Example call to XTTS (as it's more standard to implement in a script)
-        # In a real scenario, this would be replaced by a call to the Fish Speech API
-        print(f"Synthesizing '{text[:30]}...' for {speaker_id}")
-        
-        # Hypothetical CLI usage:
-        # subprocess.run(["fish-speech", "--text", text, "--ref", str(ref_audio_path), "--out", str(output_path)])
-        
-        # For the prototype, we'll just log the action. 
-        # In a real implementation, you'd use the specific API of the chosen model.
-        return output_path
+        try:
+            self.model.tts_to_file(
+                text=text,
+                speaker_wav=str(ref_audio_path),
+                language=language,
+                file_path=str(output_path)
+            )
+            return output_path
+        except Exception as e:
+            print(f"TTS Synthesis failed for {speaker_id}: {e}")
+            return None
 
     def adjust_speed(self, audio_path, target_duration):
         """Adjusts the speed of an audio file to match the target duration without changing pitch."""

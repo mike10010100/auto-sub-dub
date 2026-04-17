@@ -40,6 +40,28 @@ def main(video_path, target_lang="Spanish", hf_token=None):
     references = synthesizer.extract_speaker_references(vocals, transcript)
     
     # 6. Synthesize & Place Audio
+    # Mapping for TTS (Coqui expects 2-letter codes)
+    lang_map = {
+        "English": "en",
+        "Spanish": "es",
+        "French": "fr",
+        "German": "de",
+        "Italian": "it",
+        "Portuguese": "pt",
+        "Polish": "pl",
+        "Turkish": "tr",
+        "Russian": "ru",
+        "Dutch": "nl",
+        "Czech": "cs",
+        "Arabic": "ar",
+        "Chinese": "zh-cn",
+        "Japanese": "ja",
+        "Korean": "ko",
+        "Hungarian": "hu",
+        "Hindi": "hi"
+    }
+    tts_lang = lang_map.get(target_lang, "en")
+    
     # Initialize blank audio matching original length
     original_audio = AudioSegment.from_wav(orig_audio)
     dubbed_audio_track = AudioSegment.silent(duration=len(original_audio))
@@ -55,11 +77,9 @@ def main(video_path, target_lang="Spanish", hf_token=None):
             
         # Synthesize clip
         clip_name = f"segment_{i}_{speaker}.wav"
-        clip_path = synthesizer.synthesize(text, speaker, references[speaker], clip_name)
+        clip_path = synthesizer.synthesize(text, speaker, references[speaker], clip_name, language=tts_lang)
         
-        # In a real run, synthesize would return the actual path to the generated audio
-        # For this prototype, we'll assume the file exists
-        if not os.path.exists(clip_path):
+        if not clip_path or not os.path.exists(clip_path):
             print(f"Skipping segment {i} (Synthesized file not found)")
             continue
             

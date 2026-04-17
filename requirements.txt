@@ -1,3 +1,4 @@
+TTS
 ffmpeg-python
 demucs
 whisperx
@@ -5,8 +6,8 @@ pydub
 audiotsm
 requests
 librosa
-torch
-torchvision
-torchaudio
-numpy
+torch==2.1.0
+torchvision==0.16.0
+torchaudio==2.1.0
+numpy<2.0.0
 tqdm

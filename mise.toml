@@ -1,6 +1,5 @@
 [tools]
 python = "3.11"
-ffmpeg = "latest"
 
 [tasks.install]
 description = "Install project dependencies"
@@ -17,3 +16,5 @@ run = "python src/synthesizer.py"
 [env]
 PYTHONPATH = "."
 OLLAMA_HOST = "http://192.168.86.172:11434"
+COQUI_TOS_AGREED = "1"
+_.file = ".env"
