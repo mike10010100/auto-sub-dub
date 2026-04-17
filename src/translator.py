@@ -1,6 +1,8 @@
 import requests
 import json
 
+from tqdm import tqdm
+
 class Translator:
     def __init__(self, ollama_url="http://192.168.86.172:11434", model="gemma4"):
         self.ollama_url = f"{ollama_url}/api/chat"
@@ -22,7 +24,7 @@ class Translator:
             "Output ONLY the translated text, no explanations or additional content."
         )
         
-        for segment in segments:
+        for segment in tqdm(segments, desc="Translating"):
             original_text = segment.get("text", "")
             if not original_text.strip():
                 translated_segments.append(segment)
