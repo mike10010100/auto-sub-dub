@@ -8,13 +8,20 @@ logger = logging.getLogger(__name__)
 
 class Transcriber:
     def __init__(self, device=None, compute_type=None, hf_token=None):
-        self.device = device or get_device()
+        requested_device = device or get_device()
+        
+        # WhisperX fix: ctranslate2 doesn't support MPS
+        if requested_device == "mps":
+            logger.info("WhisperX (ctranslate2) does not support MPS. Falling back to CPU for transcription.")
+            self.device = "cpu"
+        else:
+            self.device = requested_device
+            
         self.compute_type = compute_type or get_compute_type(self.device)
         self.hf_token = hf_token
         
-        # WhisperX specific fix for MPS/CPU (it can sometimes fail with float16)
-        if self.device != "cuda" and self.compute_type == "float16":
-            logger.warning(f"Forcing compute_type='float32' for {self.device}")
+        # WhisperX specific fix for float16 on CPU
+        if self.device == "cpu" and self.compute_type == "float16":
             self.compute_type = "float32"
             
         logger.info(f"Initialized Transcriber on {self.device} (compute_type={self.compute_type})")
@@ -35,8 +42,35 @@ class Transcriber:
         
         # 3. Assign speaker labels
         logger.info("Performing speaker diarization...")
-        diarize_model = whisperx.DiarizationPipeline(use_auth_token=self.hf_token, device=self.device)
-        diarize_segments = diarize_model(audio)
+        
+        # Truly global monkey-patch for hf_hub_download
+        import huggingface_hub
+        import sys
+        
+        original_download = huggingface_hub.hf_hub_download
+
+        def patched_download(*args, **kwargs):
+            if 'use_auth_token' in kwargs:
+                kwargs['token'] = kwargs.pop('use_auth_token')
+            return original_download(*args, **kwargs)
+
+        # Patch it in the main module and every already-loaded module that might have it
+        huggingface_hub.hf_hub_download = patched_download
+        for name, mod in sys.modules.items():
+            if name.startswith("pyannote") or name.startswith("whisperx"):
+                if hasattr(mod, "hf_hub_download"):
+                    mod.hf_hub_download = patched_download
+        
+        try:
+            diarize_model = whisperx.DiarizationPipeline(use_auth_token=self.hf_token, device=self.device)
+            diarize_segments = diarize_model(audio)
+        finally:
+            # Restore
+            huggingface_hub.hf_hub_download = original_download
+            for name, mod in sys.modules.items():
+                if name.startswith("pyannote") or name.startswith("whisperx"):
+                    if hasattr(mod, "hf_hub_download"):
+                        mod.hf_hub_download = original_download
         
         # 4. Merge results
         result = whisperx.assign_word_speakers(diarize_segments, result)

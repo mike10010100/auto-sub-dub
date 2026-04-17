@@ -18,3 +18,4 @@ tqdm
 streamlit
 watchdog
 python-dotenv
+transformers<4.45.0
