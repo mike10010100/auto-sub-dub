@@ -3,3 +3,7 @@ output/
 __pycache__/
 *.pyc
 .mise/
+*.mp4
+*.mkv
+*.wav
+!sample_video.mp4
