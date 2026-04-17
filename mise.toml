@@ -20,6 +20,6 @@ run = "python src/synthesizer.py"
 [env]
 PYTHONPATH = "."
 OLLAMA_URL = "http://192.168.86.172:11434"
-OLLAMA_MODEL = "gemma4"
+OLLAMA_MODEL = "gemma4:26b"
 COQUI_TOS_AGREED = "1"
 _.file = ".env"
