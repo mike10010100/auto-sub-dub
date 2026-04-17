@@ -6,26 +6,46 @@ from audiotsm.io.wav import WavReader, WavWriter
 import tempfile
 import torch
 from TTS.api import TTS
+import logging
+from src.utils import get_device
+
+logger = logging.getLogger(__name__)
 
 class Synthesizer:
-    def __init__(self, output_dir="output/audio_segments", device="cuda"):
+    def __init__(self, output_dir="output/audio_segments", device=None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ref_audio_dir = Path("output/references")
         self.ref_audio_dir.mkdir(parents=True, exist_ok=True)
-        self.device = device if torch.cuda.is_available() else "cpu"
+        
+        # Determine device
+        self.device = device or get_device()
+        
+        # Note: Coqui XTTS v2 can sometimes have issues with MPS (metal)
+        # depending on the version of TTS and torch.
+        # We'll try to use it, but users might need to fallback to CPU if it crashes.
+        logger.info(f"Initialized Synthesizer on {self.device}")
+        
         self.model = None
 
     def _load_model(self):
         """Lazy load the TTS model only when needed."""
         if self.model is None:
-            print(f"Loading XTTS v2 model on {self.device}...")
-            # We use XTTS v2 for expressive zero-shot voice cloning
-            self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
+            logger.info(f"Loading XTTS v2 model on {self.device}...")
+            try:
+                # We use XTTS v2 for expressive zero-shot voice cloning
+                self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
+            except Exception as e:
+                if self.device == "mps":
+                    logger.warning(f"Failed to load XTTS on MPS: {e}. Falling back to CPU.")
+                    self.device = "cpu"
+                    self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
+                else:
+                    raise
 
     def extract_speaker_references(self, vocals_path, transcript, target_clips=3, min_duration=5, max_duration=12):
         """Extracts multiple discrete high-quality audio clips per speaker for triangulation."""
-        print(f"Extracting multi-reference samples from {vocals_path} (Target: {target_clips} clips)...")
+        logger.info(f"Extracting multi-reference samples from {vocals_path} (Target: {target_clips} clips)...")
         audio = AudioSegment.from_wav(vocals_path)
         
         # Identify speakers and check for existing references
@@ -44,7 +64,7 @@ class Synthesizer:
                     speaker_ref_paths.append(str(ref_path))
             
             if speaker_ref_paths:
-                print(f"Using {len(speaker_ref_paths)} existing triangulation references for {speaker}")
+                logger.info(f"Using {len(speaker_ref_paths)} existing triangulation references for {speaker}")
                 references[speaker] = speaker_ref_paths
                 continue
 
@@ -72,7 +92,7 @@ class Synthesizer:
             
             if extracted_paths:
                 references[speaker] = extracted_paths
-                print(f"Saved {len(extracted_paths)} NEW triangulation references for {speaker}")
+                logger.info(f"Saved {len(extracted_paths)} NEW triangulation references for {speaker}")
         
         return references
 
@@ -82,10 +102,7 @@ class Synthesizer:
         
         output_path = self.output_dir / output_filename
         
-        # XTTS v2 accepts an 'emotion' parameter directly in some versions, 
-        # but the standard way is to prepend it or use the 'emotion' argument in the API call.
-        # We will strip it from the text and pass it as a parameter if supported.
-        print(f"Synthesizing for {speaker_id} in {language} (Emotion: {emotion})")
+        logger.info(f"Synthesizing for {speaker_id} in {language} (Emotion: {emotion})")
         
         try:
             self.model.tts_to_file(
@@ -93,11 +110,11 @@ class Synthesizer:
                 speaker_wav=ref_audio_paths,
                 language=language,
                 file_path=str(output_path),
-                emotion=emotion # Pass directly to XTTS v2
+                emotion=emotion
             )
             return output_path
         except Exception as e:
-            print(f"TTS Synthesis failed for {speaker_id}: {e}")
+            logger.error(f"TTS Synthesis failed for {speaker_id}: {e}")
             return None
 
     def adjust_speed(self, audio_path, target_duration):
@@ -118,7 +135,7 @@ class Synthesizer:
             
             # Avoid extreme stretching
             if speed_ratio < 0.5 or speed_ratio > 2.0:
-                print(f"Warning: Speed ratio {speed_ratio:.2f} is extreme. Clipping to [0.5, 2.0].")
+                logger.warning(f"Speed ratio {speed_ratio:.2f} is extreme. Clipping to [0.5, 2.0].")
                 speed_ratio = max(0.5, min(2.0, speed_ratio))
             
             with WavReader(temp_in_path) as reader:
@@ -138,5 +155,6 @@ class Synthesizer:
 
 if __name__ == "__main__":
     # Test stub
+    logging.basicConfig(level=logging.INFO)
     synth = Synthesizer()
-    print("Synthesizer module loaded.")
+    logger.info("Synthesizer module loaded.")

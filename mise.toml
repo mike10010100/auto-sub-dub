@@ -9,12 +9,17 @@ run = "pip install -r requirements.txt"
 description = "Run the Auto-Dub pipeline"
 run = "python main.py"
 
+[tasks.web]
+description = "Launch the Streamlit web interface"
+run = "streamlit run app.py"
+
 [tasks.test]
 description = "Run a test synthesis"
 run = "python src/synthesizer.py"
 
 [env]
 PYTHONPATH = "."
-OLLAMA_HOST = "http://192.168.86.172:11434"
+OLLAMA_URL = "http://192.168.86.172:11434"
+OLLAMA_MODEL = "gemma4"
 COQUI_TOS_AGREED = "1"
 _.file = ".env"
