@@ -20,12 +20,15 @@ class Translator:
         system_prompt = (
             f"You are a professional video translator. Your task is to translate subtitles from their source language into {target_lang}. "
             "Maintain the original tone, emotion, and character personality. "
-            "Ensure the translated text is concise enough to be spoken within the original timeframe. "
+            "CRITICAL: The speaking length of your translation MUST closely match the original timeframe provided. "
+            "If the timeframe is short, use concise language. If it is longer, you can be more descriptive. "
             "Output ONLY the translated text, no explanations or additional content."
         )
         
         for segment in tqdm(segments, desc="Translating"):
             original_text = segment.get("text", "")
+            duration = segment.get("end", 0) - segment.get("start", 0)
+            
             if not original_text.strip():
                 translated_segments.append(segment)
                 continue
@@ -34,7 +37,7 @@ class Translator:
                 "model": self.model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Translate this subtitle: '{original_text}'"}
+                    {"role": "user", "content": f"Translate this subtitle (Target Duration: {duration:.2f}s): '{original_text}'"}
                 ],
                 "stream": False,
                 "options": {
