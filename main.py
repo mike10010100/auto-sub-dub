@@ -62,7 +62,12 @@ def main(video_path, target_lang="Spanish", hf_token=None):
     # 4. Translate
     translated_transcript_path = project_dir / "transcript_translated.json"
     if not translated_transcript_path.exists():
-        translated_segments = translator.translate_segments(transcript["segments"], target_lang=target_lang)
+        # Use Hybrid Multimodal Translation (Audio + Text)
+        translated_segments = translator.translate_segments_multimodal(
+            transcript["segments"], 
+            vocals_path=vocals, 
+            target_lang=target_lang
+        )
         transcript["translated_segments"] = translated_segments
         transcriber.save_transcript(transcript, translated_transcript_path)
     else:
@@ -117,8 +122,12 @@ def main(video_path, target_lang="Spanish", hf_token=None):
         clip_name = f"segment_{i}_{speaker}.wav"
         clip_path = audio_segments_dir / clip_name
         
+        # Pass [EMOTION] tag to synthesizer if available
+        emotion_tag = segment.get("emotion", "[NEUTRAL]")
+        full_text = f"{emotion_tag} {text}"
+        
         if not clip_path.exists():
-            clip_path = synthesizer.synthesize(text, speaker, references[speaker], clip_name, language=tts_lang)
+            clip_path = synthesizer.synthesize(full_text, speaker, references[speaker], clip_name, language=tts_lang)
         else:
             print(f"Skipping synthesis for segment {i}, using existing: {clip_path}")
         
