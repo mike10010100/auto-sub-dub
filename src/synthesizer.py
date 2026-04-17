@@ -47,6 +47,12 @@ class Synthesizer:
         
         references = {}
         for speaker, clips in speaker_clips.items():
+            ref_path = self.ref_audio_dir / f"{speaker}_ref.wav"
+            if ref_path.exists():
+                print(f"Using existing reference for {speaker}: {ref_path}")
+                references[speaker] = ref_path
+                continue
+
             if not clips:
                 continue
             # Combine the first few clips to reach ~10 seconds
@@ -56,7 +62,6 @@ class Synthesizer:
                     break
                 combined += clip
             
-            ref_path = self.ref_audio_dir / f"{speaker}_ref.wav"
             combined.export(ref_path, format="wav")
             references[speaker] = ref_path
             print(f"Saved reference for {speaker} ({combined.duration_seconds:.1f}s) to {ref_path}")

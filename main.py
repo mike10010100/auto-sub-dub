@@ -24,19 +24,46 @@ def main(video_path, target_lang="Spanish", hf_token=None):
     synthesizer = Synthesizer(output_dir=output_dir / "audio_segments")
     
     # 2. Process Audio
-    orig_audio = audio_proc.extract_audio(video_path)
-    vocals, background = audio_proc.separate_vocals(orig_audio)
+    orig_audio = output_dir / "temp" / "original_audio.wav"
+    if not orig_audio.exists():
+        orig_audio = audio_proc.extract_audio(video_path)
+    else:
+        print(f"Skipping audio extraction, using existing: {orig_audio}")
+
+    # Demucs output paths
+    base_name = Path(orig_audio).stem
+    vocals = output_dir / "temp" / "htdemucs" / base_name / "vocals.wav"
+    background = output_dir / "temp" / "htdemucs" / base_name / "no_vocals.wav"
+    
+    if not vocals.exists() or not background.exists():
+        vocals, background = audio_proc.separate_vocals(orig_audio)
+    else:
+        print(f"Skipping vocal separation, using existing: {vocals}")
     
     # 3. Transcribe & Diarize
-    transcript = transcriber.transcribe(vocals)
-    transcriber.save_transcript(transcript, output_dir / "transcript.json")
+    transcript_path = output_dir / "transcript.json"
+    if not transcript_path.exists():
+        transcript = transcriber.transcribe(vocals)
+        transcriber.save_transcript(transcript, transcript_path)
+    else:
+        print(f"Skipping transcription, using existing: {transcript_path}")
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            transcript = json.load(f)
     
     # 4. Translate
-    translated_segments = translator.translate_segments(transcript["segments"], target_lang=target_lang)
-    transcript["translated_segments"] = translated_segments
-    transcriber.save_transcript(transcript, output_dir / "transcript_translated.json")
+    translated_transcript_path = output_dir / "transcript_translated.json"
+    if not translated_transcript_path.exists():
+        translated_segments = translator.translate_segments(transcript["segments"], target_lang=target_lang)
+        transcript["translated_segments"] = translated_segments
+        transcriber.save_transcript(transcript, translated_transcript_path)
+    else:
+        print(f"Skipping translation, using existing: {translated_transcript_path}")
+        with open(translated_transcript_path, "r", encoding="utf-8") as f:
+            transcript = json.load(f)
+        translated_segments = transcript["translated_segments"]
     
     # 5. Extract Speaker References
+    # We always re-extract or check inside the method, but let's make it consistent
     references = synthesizer.extract_speaker_references(vocals, transcript)
     
     # 6. Synthesize & Place Audio
@@ -77,7 +104,12 @@ def main(video_path, target_lang="Spanish", hf_token=None):
             
         # Synthesize clip
         clip_name = f"segment_{i}_{speaker}.wav"
-        clip_path = synthesizer.synthesize(text, speaker, references[speaker], clip_name, language=tts_lang)
+        clip_path = output_dir / "audio_segments" / clip_name
+        
+        if not clip_path.exists():
+            clip_path = synthesizer.synthesize(text, speaker, references[speaker], clip_name, language=tts_lang)
+        else:
+            print(f"Skipping synthesis for segment {i}, using existing: {clip_path}")
         
         if not clip_path or not os.path.exists(clip_path):
             print(f"Skipping segment {i} (Synthesized file not found)")
@@ -85,6 +117,9 @@ def main(video_path, target_lang="Spanish", hf_token=None):
             
         # Adjust speed to fit segment duration
         target_duration = end_time - start_time
+        # We always adjust speed as the synthesis might be different/new
+        # but technically we could check if it was already adjusted if we had metadata
+        # for now let's just adjust it
         synthesizer.adjust_speed(clip_path, target_duration)
         
         # Load and overlay
@@ -93,6 +128,17 @@ def main(video_path, target_lang="Spanish", hf_token=None):
         dubbed_audio_track = dubbed_audio_track.overlay(segment_audio, position=start_ms)
         
     # 7. Mix with background and Remux
+    video_output_path = output_dir / f"dubbed_{Path(video_path).name}"
+    if video_output_path.exists():
+        print(f"Final dubbed video already exists at {video_output_path}")
+        # we can decide to overwrite it or not. For resiliency, maybe user wants to re-run.
+        # But if they want to skip everything, this is the final stop.
+        # Let's offer a way to force re-render in the future, but for now skip.
+        # However, if any synthesis was new, user likely wants a new video.
+        # Let's just output the message and still proceed to mix/remux if we've reached this point
+        # OR we can exit here if the user just wants the final result.
+        pass
+
     print("Mixing final audio track...")
     background_audio = AudioSegment.from_wav(background)
     final_mixed_audio = dubbed_audio_track.overlay(background_audio)
@@ -101,12 +147,12 @@ def main(video_path, target_lang="Spanish", hf_token=None):
     final_mixed_audio.export(final_audio_path, format="wav")
     
     # Remux back to video
-    video_output_path = output_dir / f"dubbed_{Path(video_path).name}"
     print(f"Remuxing final video to {video_output_path}...")
     
     # FFmpeg command to replace audio stream
     subprocess.run([
         "ffmpeg",
+        "-y", # Overwrite if exists
         "-i", str(video_path),
         "-i", str(final_audio_path),
         "-map", "0:v",
