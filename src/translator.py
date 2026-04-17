@@ -6,7 +6,7 @@ from tqdm import tqdm
 from ollama import Client
 
 class Translator:
-    def __init__(self, ollama_url="http://192.168.86.172:11434", model="gemma4:e4b"):
+    def __init__(self, ollama_url="http://192.168.86.172:11434", model="gemma4"):
         self.client = Client(host=ollama_url)
         self.model = model
 
@@ -18,19 +18,20 @@ class Translator:
         """
         from pydub import AudioSegment
         
-        print(f"Translating {len(segments)} segments to {target_lang} (Hybrid Multimodal)...")
+        print(f"Translating {len(segments)} segments to {target_lang} (Gemma 4 Multimodal)...")
         audio = AudioSegment.from_wav(vocals_path)
         
         translated_segments = []
         
+        # Best Practice: Trigger thinking mode with <|think|>
         system_prompt = (
-            f"You are a professional video translator and voice director. Your task is to translate subtitles "
+            "<|think|>You are a professional video translator and voice director. Your task is to translate subtitles "
             f"from their source language into {target_lang} while strictly matching the performance of the audio provided.\n\n"
             "INSTRUCTIONS:\n"
             f"1. TRANSLATION: Translate the text to {target_lang}. Ensure it is natural and matches the speaker's intent.\n"
             "2. TIMING: The translation MUST be speakable within the original timeframe. Use concise language for short clips.\n"
             "3. EMOTION: Analyze the audio clip for emotional cues (e.g., sarcasm, anger, whispering, excitement).\n"
-            "4. OUTPUT FORMAT: Respond with ONLY a JSON object in this format: "
+            "4. OUTPUT FORMAT: Respond with ONLY a JSON object (after your thinking block) in this format: "
             "{\"translated_text\": \"...\", \"emotion\": \"[EMOTION_TAG]\"}\n"
             "Valid tags: [NEUTRAL], [WHISPER], [ANGRY], [EXCITED], [SAD], [SARCASM], [FRIENDLY], [SHOUTING]."
         )
@@ -48,32 +49,43 @@ class Translator:
             end_ms = int(segment["end"] * 1000)
             clip = audio[start_ms:end_ms]
             
-            # Export to a temporary buffer
             import io
             buffer = io.BytesIO()
             clip.export(buffer, format="wav")
             audio_bytes = buffer.getvalue()
             
             try:
-                # Call Ollama Multimodal API
+                # Best Practice: Modality order - audio content before text
+                # Ollama Python library handles multimodal via the 'images' or 'audio' list
+                # We also include a hint in the text prompt
                 response = self.client.chat(
                     model=self.model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {
                             "role": "user", 
-                            "content": f"Translate this segment (Target Duration: {duration:.2f}s). Original Transcript: '{original_text}'",
+                            "content": f"[AUDIO INPUT] Translate this segment (Target Duration: {duration:.2f}s). Original Transcript: '{original_text}'",
                             "audio": [audio_bytes]
                         }
                     ],
-                    options={"temperature": 0.2}
+                    # Best Practice: Sampling parameters
+                    options={
+                        "temperature": 1.0,
+                        "top_p": 0.95,
+                        "top_k": 64
+                    }
                 )
                 
                 content = response['message']['content'].strip()
                 
+                # Note: For non-edge models, if thinking is enabled, the output will contain:
+                # <|channel>thought\n[Internal reasoning]<channel|>[Final answer]
+                # We need to strip the thinking block to get the JSON.
+                if "<channel|>" in content:
+                    content = content.split("<channel|>")[-1].strip()
+                
                 # Attempt to parse JSON from the response
                 try:
-                    # Look for JSON block if model was wordy
                     if "{" in content and "}" in content:
                         content = content[content.find("{"):content.rfind("}")+1]
                     
@@ -81,7 +93,6 @@ class Translator:
                     translated_text = data.get("translated_text", "").strip()
                     emotion = data.get("emotion", "[NEUTRAL]")
                 except (json.JSONDecodeError, ValueError):
-                    # Fallback if JSON parsing fails
                     translated_text = content
                     emotion = "[NEUTRAL]"
                 
