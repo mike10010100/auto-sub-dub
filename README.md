@@ -14,7 +14,11 @@ A fully local, open-source pipeline for automatic video dubbing using AI. Now wi
 ## Prerequisites
 1. **FFmpeg:** Ensure `ffmpeg` is installed on your system.
 2. **Ollama:** Ensure Ollama is running with the `gemma4` model pulled.
-3. **Environment Setup:** 
+3. **macOS Build Tools:** If you are on a Mac, install the command line tools for better performance:
+   ```bash
+   xcode-select --install
+   ```
+4. **Environment Setup:** 
    - Copy `.env.example` to `.env`.
    - Add your **Hugging Face Token** (required for speaker diarization).
    - Configure your **Ollama URL** and **Model** if they differ from defaults.

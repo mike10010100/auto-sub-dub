@@ -16,3 +16,4 @@ pandas
 setuptools
 tqdm
 streamlit
+watchdog
