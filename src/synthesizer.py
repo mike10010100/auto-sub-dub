@@ -19,11 +19,15 @@ class Synthesizer:
         self.ref_audio_dir.mkdir(parents=True, exist_ok=True)
         
         # Determine device
-        self.device = device or get_device()
+        detected_device = device or get_device()
         
-        # Note: Coqui XTTS v2 can sometimes have issues with MPS (metal)
-        # depending on the version of TTS and torch.
-        # We'll try to use it, but users might need to fallback to CPU if it crashes.
+        # Force CPU for XTTS on Mac (MPS is too unstable for this specific model)
+        if detected_device == "mps":
+            logger.info("XTTS v2 is unstable on MPS. Forcing CPU for high-quality synthesis.")
+            self.device = "cpu"
+        else:
+            self.device = detected_device
+        
         logger.info(f"Initialized Synthesizer on {self.device}")
         
         self.model = None
