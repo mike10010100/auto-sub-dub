@@ -2,9 +2,18 @@ import streamlit as st
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+import signal
+import sys
 
 # Load environment variables early
 load_dotenv()
+
+# Handle shutdown gracefully to avoid Streamlit reentrancy bugs on macOS
+def signal_handler(sig, frame):
+    st.stop()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
 
 import main as pipeline
 import json

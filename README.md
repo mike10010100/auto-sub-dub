@@ -64,6 +64,11 @@ The dubbed output will be saved in a per-video project folder in the `output/` d
   - **Apple Silicon:** M1 Pro or better recommended (16GB+ Unified Memory).
 - **Disk Space:** ~10-15GB for model weights.
 
+## Troubleshooting
+- **Shutdown Errors (RuntimeError):** On some macOS systems, you may see a `RuntimeError: reentrant call` when closing the Streamlit dashboard with `Ctrl+C`. This is a known issue with Streamlit's internal signal handling and does not affect the correctness of your dubbing projects.
+- **Diarization Fails:** Ensure your `HF_TOKEN` is valid and you have accepted the terms for the `pyannote/speaker-diarization` and `pyannote/segmentation` models on Hugging Face.
+- **Ollama Connection:** Verify Ollama is running and accessible at the URL provided in the UI or `.env`.
+
 ## Project Structure
 - `main.py`: Orchestrator and entry point.
 - `app.py`: Streamlit web dashboard.
