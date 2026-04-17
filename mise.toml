@@ -1,0 +1,19 @@
+[tools]
+python = "3.11"
+ffmpeg = "latest"
+
+[tasks.install]
+description = "Install project dependencies"
+run = "pip install -r requirements.txt"
+
+[tasks.run]
+description = "Run the Auto-Dub pipeline"
+run = "python main.py"
+
+[tasks.test]
+description = "Run a test synthesis"
+run = "python src/synthesizer.py"
+
+[env]
+PYTHONPATH = "."
+OLLAMA_HOST = "http://192.168.86.172:11434"

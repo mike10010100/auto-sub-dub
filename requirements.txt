@@ -1,0 +1,12 @@
+ffmpeg-python
+demucs
+whisperx
+pydub
+audiotsm
+requests
+librosa
+torch
+torchvision
+torchaudio
+numpy
+tqdm
