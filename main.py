@@ -15,6 +15,9 @@ def main(video_path, target_lang="Spanish", hf_token=None):
     output_dir = Path("output")
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Priority: CLI argument > .env environment variable
+    hf_token = hf_token or os.getenv("HF_TOKEN")
+    
     audio_proc = AudioProcessor(output_dir=output_dir)
     transcriber = Transcriber(hf_token=hf_token)
     translator = Translator()
