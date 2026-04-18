@@ -45,11 +45,13 @@ with st.sidebar:
     hf_token = st.text_input("Hugging Face Token", value=os.getenv("HF_TOKEN", ""), type="password", help="Required for speaker diarization (WhisperX)")
     
     ollama_url = st.text_input("Ollama URL", value=os.getenv("OLLAMA_URL", "http://192.168.86.172:11434"), help="The address of your local or remote Ollama instance")
-    ollama_model = st.text_input("Ollama Model", value=os.getenv("OLLAMA_MODEL", "gemma4"), help="The model to use for translation")
-    
+    ollama_model = st.text_input("Ollama Translation Model", value=os.getenv("OLLAMA_MODEL", "gemma4:26b"), help="Text translation model (e.g. gemma4:26b)")
+    ollama_audio_model = st.text_input("Ollama Audio Model", value=os.getenv("OLLAMA_AUDIO_MODEL", "gemma4:e4b"), help="Audio-informed emotion tagging model. Must be an E-variant of Gemma 4 (e2b/e4b).")
+
     # Update environment variables for the pipeline call
     os.environ["OLLAMA_URL"] = ollama_url
     os.environ["OLLAMA_MODEL"] = ollama_model
+    os.environ["OLLAMA_AUDIO_MODEL"] = ollama_audio_model
     
     st.divider()
     st.info(f"Optimal hardware: **{auto_device.upper()}**")
@@ -60,6 +62,7 @@ OS: {os.uname().sysname}
 Device: {device}
 Ollama: {ollama_url}
 Model: {ollama_model}
+Audio Model: {ollama_audio_model}
         """.strip())
 
 # Main area
@@ -83,12 +86,13 @@ if uploaded_file is not None:
             with st.status("Dubbing in progress...", expanded=True) as status:
                 st.write(f"Step 1: Initializing components on {device}...")
                 pipeline.main(
-                    str(video_path), 
-                    target_lang=target_lang, 
-                    hf_token=hf_token, 
+                    str(video_path),
+                    target_lang=target_lang,
+                    hf_token=hf_token,
                     device=device,
                     ollama_url=ollama_url,
-                    ollama_model=ollama_model
+                    ollama_model=ollama_model,
+                    ollama_audio_model=ollama_audio_model,
                 )
                 
                 status.update(label="Dubbing complete!", state="complete", expanded=False)

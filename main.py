@@ -30,7 +30,41 @@ from src.translator import Translator
 from src.synthesizer import Synthesizer
 from src.utils import get_device
 
-def main(video_path, target_lang="Spanish", hf_token=None, device=None, ollama_url=None, ollama_model=None):
+
+def annotate_effective_windows(segments, min_duration=1.8, max_steal=1.0, audio_end=None):
+    """
+    For each segment below `min_duration`, steal silence from the gap on
+    either side (up to `max_steal` seconds) to widen the placement window.
+    This gives TTS enough room to speak the translation without having to
+    be speed-clamped into chipmunk territory. Mutates segments in place.
+    """
+    n = len(segments)
+    for i, seg in enumerate(segments):
+        start = seg["start"]
+        end = seg["end"]
+        dur = end - start
+
+        prev_end = segments[i - 1]["end"] if i > 0 else 0.0
+        next_start = segments[i + 1]["start"] if i + 1 < n else (audio_end if audio_end is not None else end + max_steal)
+        left_gap = max(0.0, start - prev_end)
+        right_gap = max(0.0, next_start - end)
+
+        if dur >= min_duration:
+            seg["effective_start"] = start
+            seg["effective_end"] = end
+            continue
+
+        need = min_duration - dur
+        left_take = min(need / 2, left_gap, max_steal)
+        right_take = min(need - left_take, right_gap, max_steal)
+        # If one side was saturated, try to recover from the other.
+        if left_take + right_take < need:
+            left_take = min(need - right_take, left_gap, max_steal)
+
+        seg["effective_start"] = start - left_take
+        seg["effective_end"] = end + right_take
+
+def main(video_path, target_lang="Spanish", hf_token=None, device=None, ollama_url=None, ollama_model=None, ollama_audio_model=None):
     # 1. Initialize components
     video_name = Path(video_path).stem
     project_dir = Path("output") / video_name
@@ -51,7 +85,7 @@ def main(video_path, target_lang="Spanish", hf_token=None, device=None, ollama_u
     
     audio_proc = AudioProcessor(output_dir=project_dir)
     transcriber = Transcriber(device=device, hf_token=hf_token)
-    translator = Translator(ollama_url=ollama_url, model=ollama_model)
+    translator = Translator(ollama_url=ollama_url, model=ollama_model, audio_model=ollama_audio_model)
     synthesizer = Synthesizer(output_dir=audio_segments_dir, device=device)
     
     # 2. Process Audio
@@ -83,10 +117,14 @@ def main(video_path, target_lang="Spanish", hf_token=None, device=None, ollama_u
     # 4. Translate
     translated_transcript_path = project_dir / "transcript_translated.json"
     if not translated_transcript_path.exists():
+        # Pre-compute expanded placement windows so short segments get
+        # enough room for TTS to speak the translation at natural pace.
+        audio_end_sec = len(AudioSegment.from_wav(orig_audio)) / 1000.0
+        annotate_effective_windows(transcript["segments"], audio_end=audio_end_sec)
         translated_segments = translator.translate_segments_multimodal(
-            transcript["segments"], 
-            vocals_path=vocals, 
-            target_lang=target_lang
+            transcript["segments"],
+            vocals_path=vocals,
+            target_lang=target_lang,
         )
         transcript["translated_segments"] = translated_segments
         transcriber.save_transcript(transcript, translated_transcript_path)
@@ -117,8 +155,10 @@ def main(video_path, target_lang="Spanish", hf_token=None, device=None, ollama_u
     for i, segment in enumerate(translated_segments):
         speaker = segment.get("speaker")
         text = segment.get("text")
-        start_time = segment.get("start")
-        end_time = segment.get("end")
+        # Use the widened placement window if present; fall back to the
+        # raw diarized boundaries for backward compatibility.
+        start_time = segment.get("effective_start", segment.get("start"))
+        end_time = segment.get("effective_end", segment.get("end"))
         
         if not speaker or not text or speaker not in references:
             continue
@@ -183,14 +223,16 @@ if __name__ == "__main__":
     parser.add_argument("--hf_token", help="Hugging Face token for diarization")
     parser.add_argument("--device", help="Device to use (cuda, mps, cpu)")
     parser.add_argument("--ollama_url", help="Ollama instance URL")
-    parser.add_argument("--ollama_model", help="Ollama model name")
-    
+    parser.add_argument("--ollama_model", help="Ollama model name for text translation (e.g. gemma4:26b)")
+    parser.add_argument("--ollama_audio_model", help="Ollama model for audio-informed emotion tagging (e.g. gemma4:e4b)")
+
     args = parser.parse_args()
     main(
-        args.video, 
-        target_lang=args.lang, 
-        hf_token=args.hf_token, 
+        args.video,
+        target_lang=args.lang,
+        hf_token=args.hf_token,
         device=args.device,
         ollama_url=args.ollama_url,
-        ollama_model=args.ollama_model
+        ollama_model=args.ollama_model,
+        ollama_audio_model=args.ollama_audio_model,
     )
