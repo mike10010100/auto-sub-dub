@@ -134,12 +134,42 @@ class Translator:
             logger.error(f"Emotion tagging failed, defaulting to [NEUTRAL]: {e}")
             return "[NEUTRAL]"
 
-    def _translate_once(self, original_text, emotion, duration, target_lang, budget, stricter=False):
+    @staticmethod
+    def _format_context(segments, start_i, end_i, current_idx, completed=None):
+        """Render context window as numbered lines, marking the target line."""
+        if end_i <= start_i:
+            return ""
+        lines = []
+        for j in range(start_i, end_i):
+            seg = segments[j]
+            src = (seg.get("text") or "").strip()
+            speaker = seg.get("speaker") or "?"
+            if j == current_idx:
+                lines.append(f"  [{j}] ({speaker}) >>> {src}  ← TRANSLATE THIS LINE")
+            else:
+                # Prefer already-translated output when available so the
+                # model can keep pronouns/register consistent.
+                done = (completed or {}).get(j)
+                if done:
+                    lines.append(f"  [{j}] ({speaker}) {src}  → {done}")
+                else:
+                    lines.append(f"  [{j}] ({speaker}) {src}")
+        return "\n".join(lines)
+
+    def _translate_once(self, original_text, emotion, duration, target_lang, budget,
+                        stricter=False, context_block=""):
         unit = "characters" if target_lang in CHARS_PER_SECOND else "words"
         extra = (
             " Your previous attempt was too long. Be MORE concise this time, "
             "drop filler, and keep only essential meaning."
             if stricter else ""
+        )
+        ctx_rule = (
+            "5. Use the conversation context to disambiguate meaning. Resolve "
+            "greetings vs. farewells, pronouns, gendered agreement, callbacks, "
+            "and sarcasm from the surrounding lines. Translate ONLY the line "
+            "marked '← TRANSLATE THIS LINE'.\n"
+            if context_block else ""
         )
         system_prompt = (
             "<|think|>You are a professional video translator and voice director. "
@@ -151,12 +181,17 @@ class Translator:
             "and redundancy before exceeding this limit.\n"
             "3. Match the delivery implied by the provided emotion tag.\n"
             "4. Respond with ONLY a JSON object (after any thinking block): "
-            "{\"translated_text\": \"...\"}"
+            "{\"translated_text\": \"...\"}\n"
+            + ctx_rule
             + extra
         )
+        context_section = (
+            f"CONVERSATION CONTEXT:\n{context_block}\n\n" if context_block else ""
+        )
         user_msg = (
+            f"{context_section}"
             f"Emotion: {emotion}. Target duration: {duration:.2f}s. "
-            f"Budget: {budget} {unit}. Original transcript: '{original_text}'"
+            f"Budget: {budget} {unit}. Translate line: '{original_text}'"
         )
         resp = self._chat_with_retry(
             model=self.model,
@@ -177,10 +212,14 @@ class Translator:
         except (json.JSONDecodeError, ValueError):
             return content.strip()
 
-    def _translate_text(self, original_text, emotion, duration, target_lang, overrun_ratio=1.2):
+    def _translate_text(self, original_text, emotion, duration, target_lang,
+                        context_block="", overrun_ratio=1.2):
         """Translate; if the result wouldn't fit in the source window, retry once with a tighter budget."""
         budget = _length_budget(duration, target_lang, headroom=1.0)
-        translated = self._translate_once(original_text, emotion, duration, target_lang, budget)
+        translated = self._translate_once(
+            original_text, emotion, duration, target_lang, budget,
+            context_block=context_block,
+        )
         if not translated:
             return original_text
 
@@ -199,71 +238,88 @@ class Translator:
         )
         retry = self._translate_once(
             original_text, emotion, duration, target_lang,
-            budget=new_budget, stricter=True,
+            budget=new_budget, stricter=True, context_block=context_block,
         )
         if retry and _estimate_spoken_duration(retry, target_lang) < est:
             return retry
         return translated
 
     def translate_segments_multimodal(
-        self, segments, vocals_path, target_lang="English", max_workers=2
+        self, segments, vocals_path, target_lang="English",
+        max_workers=2, context_before=5, context_after=3,
     ):
         """
-        For each segment:
-          1. Tag emotion from audio via gemma4:e4b (images-field workaround).
-          2. Translate text via gemma4:26b conditioned on the tag.
+        Two-pass translation:
+          1. Emotion tags via gemma4:e4b (parallel — independent audio calls).
+          2. Text translation via gemma4:26b sequentially, feeding each call
+             a rolling window of the surrounding source lines plus the
+             already-translated lines so the model can disambiguate greetings
+             vs. farewells, pronouns, sarcasm, and callbacks.
         """
         from pydub import AudioSegment
 
         logger.info(
             f"Translating {len(segments)} segments to {target_lang} "
             f"(audio-tag={self.audio_model}, translate={self.model}, "
-            f"max_workers={max_workers})"
+            f"ctx=-{context_before}/+{context_after})"
         )
         audio = AudioSegment.from_wav(vocals_path)
 
-        def process(index_segment):
-            idx, segment = index_segment
+        # --- Pass 1: audio-informed emotion tagging (parallel). ---
+        def tag_one(idx_seg):
+            idx, segment = idx_seg
             original_text = (segment.get("text") or "").strip()
-            start = segment.get("start", 0.0)
-            end = segment.get("end", 0.0)
-            # Prefer the expanded placement window if main.py computed one
-            # (short segments steal adjacent silence to give TTS room).
-            eff_start = segment.get("effective_start", start)
-            eff_end = segment.get("effective_end", end)
-            duration = max(0.0, eff_end - eff_start)
-
             if not original_text:
-                return idx, segment
-
-            clip = audio[int(start * 1000):int(end * 1000)]
+                return idx, "[NEUTRAL]"
+            clip = audio[int(segment.get("start", 0) * 1000):int(segment.get("end", 0) * 1000)]
             audio_bytes = self._clip_to_wav_bytes(clip)
+            return idx, self._tag_emotion(audio_bytes, original_text)
 
-            emotion = self._tag_emotion(audio_bytes, original_text)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            tag_results = list(tqdm(
+                executor.map(tag_one, list(enumerate(segments))),
+                total=len(segments),
+                desc="Tagging emotion (audio)",
+            ))
+        emotions = {idx: tag for idx, tag in tag_results}
+
+        # --- Pass 2: text translation sequentially with rolling context. ---
+        completed = {}  # idx -> translated text, feeds into context of later calls
+        out = [None] * len(segments)
+
+        for idx, segment in enumerate(tqdm(segments, desc="Translating (text+context)")):
+            original_text = (segment.get("text") or "").strip()
+            if not original_text:
+                out[idx] = segment
+                continue
+
+            eff_start = segment.get("effective_start", segment.get("start", 0.0))
+            eff_end = segment.get("effective_end", segment.get("end", 0.0))
+            duration = max(0.0, eff_end - eff_start)
+            emotion = emotions.get(idx, "[NEUTRAL]")
+
+            ctx_lo = max(0, idx - context_before)
+            ctx_hi = min(len(segments), idx + context_after + 1)
+            context_block = self._format_context(segments, ctx_lo, ctx_hi, idx, completed)
+
             try:
                 translated_text = self._translate_text(
-                    original_text, emotion, duration, target_lang
+                    original_text, emotion, duration, target_lang,
+                    context_block=context_block,
                 )
             except Exception as e:
                 logger.error(f"Translation failed for segment {idx}: {e}")
-                return idx, segment
+                out[idx] = segment
+                continue
 
+            completed[idx] = translated_text
             new_segment = segment.copy()
             new_segment["original_text"] = original_text
             new_segment["text"] = translated_text
             new_segment["emotion"] = emotion
-            return idx, new_segment
+            out[idx] = new_segment
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            indexed = list(enumerate(segments))
-            results = list(tqdm(
-                executor.map(process, indexed),
-                total=len(segments),
-                desc="Translating (audio→tag→text)",
-            ))
-
-        results.sort(key=lambda x: x[0])
-        return [r[1] for r in results]
+        return out
 
 
 if __name__ == "__main__":
