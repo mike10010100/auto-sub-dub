@@ -272,11 +272,14 @@ class Synthesizer:
             audio.export(temp_in_path, format="wav")
             
             speed_ratio = current_duration / target_duration
-            
-            # Avoid extreme stretching
-            if speed_ratio < 0.5 or speed_ratio > 2.0:
-                logger.warning(f"Speed ratio {speed_ratio:.2f} is extreme. Clipping to [0.5, 2.0].")
-                speed_ratio = max(0.5, min(2.0, speed_ratio))
+
+            # Floor at 1.0 — never slow the dub below XTTS's natural pace
+            # (sounds sluggish and unnatural), even if the target window is
+            # longer. Cap at 2.0 to avoid chipmunk speech when the window
+            # is very tight.
+            if speed_ratio < 1.0 or speed_ratio > 2.0:
+                logger.info(f"Speed ratio {speed_ratio:.2f} clipped to [1.0, 2.0].")
+                speed_ratio = max(1.0, min(2.0, speed_ratio))
             
             with WavReader(temp_in_path) as reader:
                 with WavWriter(temp_out_path, reader.channels, reader.samplerate) as writer:
