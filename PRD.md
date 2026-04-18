@@ -48,9 +48,14 @@ Build a fully local, open-source pipeline that takes a video file, isolates voca
 4. **Environment Awareness:** Explicit `.env` loading for seamless configuration.
 
 ### Phase 7: Future Roadmap
-1. **Visual Lip-Syncing:** Integrate **Wav2Lip** or **LivePortrait** to re-animate mouths to match the new audio.
-2. **Batch Processing:** Ability to queue multiple videos in the web dashboard.
-3. **Translation Editor:** Interactive UI to manually override LLM translations before synthesis.
+1. **Loudness Matching (EBU R128 / LUFS):** Normalize the synthesized dub track to the original vocal track's integrated loudness with `pyloudnorm` before ducking, so the dub sits at the same subjective level as the source voice.
+2. **Text Normalization Before TTS:** Expand numbers, dates, ordinals, and common acronyms into spoken form (`num2words` or a small Gemma pass) per target language. XTTS currently mangles "2025", "km", "Dr.", etc.
+3. **Subtitle Reconciliation:** When the input video carries a target-language subtitle stream (`mov_text` / `srt` / `ass`), extract it with FFmpeg, align to our diarized segments by timestamp, and pass both the source line and the professional translation to Gemma as "reconcile these." Narrow applicability (maybe 10-20% of inputs) but produces best-in-class translation when it hits; dubtitles can be condensed so treat as reference, not gospel.
+4. **Visual Lip-Syncing:** Integrate **Wav2Lip** or **LivePortrait** to re-animate mouths to match the new audio. Largest perceptual leap; also the largest scope (model download, GPU cost, failure modes on non-frontal shots).
+5. **Diarization Robustness:** Merge over-split pyannote speakers via cosine similarity on speaker embeddings; re-verify speaker assignments near boundaries.
+6. **Reference Extraction Resilience:** Handle speakers with no segments in the ideal 3-15s window — widen the window, trim long monologue blobs to the XTTS sweet spot, and concatenate multiple short clips when needed. *Without this, side characters with only long or only very short segments get zero refs and go silent in the dub.*
+7. **Batch Processing:** Ability to queue multiple videos in the web dashboard.
+8. **Translation Editor:** Interactive UI to manually override LLM translations before synthesis.
 
 ## Verification & Testing
 1. **Single-Speaker Test:** Verified with Spanish-to-English sample.

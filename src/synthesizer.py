@@ -111,7 +111,8 @@ class Synthesizer:
                     raise
 
     def extract_speaker_references(self, vocals_path, transcript, target_clips=3,
-                                    min_duration=5, max_duration=12,
+                                    min_duration=3, max_duration=20,
+                                    trim_to=12.0,
                                     hq_vocals_path=None,
                                     min_voiced_ratio=0.55):
         """
@@ -150,21 +151,42 @@ class Synthesizer:
         unique_speakers = {s["speaker"] for s in segments if s.get("speaker")}
 
         for speaker in unique_speakers:
+            spk_segs = [s for s in segments if s.get("speaker") == speaker]
             candidates = []  # list of (score_tuple, clip, emotion, metrics)
-            for seg in segments:
-                if seg.get("speaker") != speaker:
-                    continue
+            for seg in spk_segs:
                 duration = seg["end"] - seg["start"]
-                if not (min_duration <= duration <= max_duration):
+                if duration < min_duration:
                     continue
-                clip = audio[int(seg["start"] * 1000):int(seg["end"] * 1000)]
+                start_ms = int(seg["start"] * 1000)
+                # Trim long diarization blobs to the XTTS sweet spot rather
+                # than rejecting them outright — otherwise side characters
+                # whose only segments are 15-30s monologues get zero refs.
+                end_ms = int(min(seg["end"], seg["start"] + trim_to) * 1000)
+                clip = audio[start_ms:end_ms]
                 if clip.dBFS <= -40:
                     continue
                 metrics = self._score_reference_clip(clip)
                 if metrics["voiced_ratio"] < min_voiced_ratio:
                     continue
                 emotion = seg.get("emotion", "[NEUTRAL]") or "[NEUTRAL]"
-                # Rank primarily by SNR, tiebreak by voiced ratio, then loudness.
+                score = (metrics["snr_db"], metrics["voiced_ratio"], metrics["dbfs"])
+                candidates.append((score, clip, emotion, metrics))
+
+            # Fallback: no clip passed the quality filters — don't let this
+            # speaker go silent in the dub. Take the longest segment,
+            # trim to the XTTS sweet spot, skip VAD gating, and accept it.
+            if not candidates and spk_segs:
+                longest = max(spk_segs, key=lambda s: s["end"] - s["start"])
+                start_ms = int(longest["start"] * 1000)
+                end_ms = int(min(longest["end"], longest["start"] + trim_to) * 1000)
+                clip = audio[start_ms:end_ms]
+                metrics = self._score_reference_clip(clip)
+                emotion = longest.get("emotion", "[NEUTRAL]") or "[NEUTRAL]"
+                logger.warning(
+                    f"  {speaker}: no clips passed filters; falling back to "
+                    f"longest segment ({(longest['end']-longest['start']):.1f}s "
+                    f"trimmed to {trim_to}s, voiced={metrics['voiced_ratio']:.2f})"
+                )
                 score = (metrics["snr_db"], metrics["voiced_ratio"], metrics["dbfs"])
                 candidates.append((score, clip, emotion, metrics))
 
