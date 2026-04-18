@@ -57,37 +57,41 @@ class AudioProcessor:
             logger.error(f"Demucs separation failed: {e}")
             raise
 
-    def duck_audio(self, vocals, background, duck_db=-15, attack_ms=50, release_ms=200):
+    def duck_audio(self, vocals, background, duck_db=-15, chunk_ms=1000):
         """
         Performs vocal ducking: lowers the background volume when vocals are active.
         'vocals' and 'background' are pydub AudioSegment objects.
+        Uses larger chunks and pre-allocation to be more memory efficient.
         """
         from pydub import AudioSegment
         
-        logger.info(f"Applying vocal ducking (reduction: {duck_db}dB)...")
+        logger.info(f"Applying vocal ducking (reduction: {duck_db}dB) in {chunk_ms}ms chunks...")
         
         # Ensure they are the same length
         max_len = max(len(vocals), len(background))
-        vocals = vocals + AudioSegment.silent(duration=max_len - len(vocals))
-        background = background + AudioSegment.silent(duration=max_len - len(background))
+        if len(vocals) < max_len:
+            vocals = vocals + AudioSegment.silent(duration=max_len - len(vocals))
+        if len(background) < max_len:
+            background = background + AudioSegment.silent(duration=max_len - len(background))
         
-        # Chunk size for analysis (e.g., 20ms)
-        chunk_size = 20
-        ducked_background = AudioSegment.empty()
+        ducked_background_parts = []
         
-        # Simple implementation: check RMS of vocal chunks
-        # A more sophisticated version would use attack/release envelopes
-        # But this works well for basic ducking.
-        for i in range(0, len(vocals), chunk_size):
-            vocal_chunk = vocals[i:i+chunk_size]
-            bg_chunk = background[i:i+chunk_size]
+        # Process in larger chunks to avoid pydub's O(N^2) addition overhead
+        for i in range(0, max_len, chunk_ms):
+            vocal_chunk = vocals[i:i+chunk_ms]
+            bg_chunk = background[i:i+chunk_ms]
             
             # If vocal chunk is louder than silence threshold (e.g., -40dB)
             if vocal_chunk.dBFS > -40:
                 # Apply ducking
-                ducked_background += bg_chunk + duck_db
+                ducked_background_parts.append(bg_chunk + duck_db)
             else:
-                ducked_background += bg_chunk
+                ducked_background_parts.append(bg_chunk)
+        
+        # Concatenate all parts efficiently
+        ducked_background = ducked_background_parts[0]
+        for part in ducked_background_parts[1:]:
+            ducked_background += part
                 
         return vocals.overlay(ducked_background)
 

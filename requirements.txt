@@ -18,3 +18,4 @@ streamlit
 watchdog
 python-dotenv
 transformers<4.45.0
+nvidia-cudnn-cu11==8.9.6.50

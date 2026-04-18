@@ -13,7 +13,7 @@ class Translator:
     def __init__(self, ollama_url=None, model=None):
         # Priority: argument > environment variable > default
         self.ollama_url = ollama_url or os.getenv("OLLAMA_URL", "http://192.168.86.172:11434")
-        self.model = model or os.getenv("OLLAMA_MODEL", "gemma4:26b")
+        self.model = model or os.getenv("OLLAMA_MODEL", "gemma4")
         
         self.client = Client(host=self.ollama_url)
         logger.info(f"Initialized Translator with Ollama at {self.ollama_url} (model: {self.model})")
