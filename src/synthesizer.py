@@ -29,8 +29,71 @@ class Synthesizer:
             self.device = detected_device
         
         logger.info(f"Initialized Synthesizer on {self.device}")
-        
+
         self.model = None
+        self._vad = None
+        self._vad_utils = None
+
+    def _load_vad(self):
+        """Lazy-load Silero VAD. Returns (model, utils) or (None, None) on failure."""
+        if self._vad is not None:
+            return self._vad, self._vad_utils
+        try:
+            import torch as _torch
+            vad, utils = _torch.hub.load(
+                repo_or_dir="snakers4/silero-vad",
+                model="silero_vad",
+                trust_repo=True,
+            )
+            self._vad = vad
+            self._vad_utils = utils
+            return vad, utils
+        except Exception as e:
+            logger.warning(f"Silero VAD unavailable ({e}); falling back to dBFS ranking.")
+            return None, None
+
+    def _score_reference_clip(self, clip):
+        """
+        Score a candidate reference clip for XTTS cloning. Returns a dict with
+        voiced_ratio, snr_db, dbfs. VAD gates out clips that are mostly music
+        or silence after Demucs; SNR favors clips where the voice sits well
+        above residual background/noise.
+        """
+        import numpy as np
+        vad, utils = self._load_vad()
+        if vad is None:
+            return {"voiced_ratio": 1.0, "snr_db": 0.0, "dbfs": clip.dBFS}
+
+        mono_16k = clip.set_channels(1).set_frame_rate(16000).set_sample_width(2)
+        samples = np.frombuffer(mono_16k.raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+        if samples.size < 16000 * 0.5:
+            return {"voiced_ratio": 0.0, "snr_db": -60.0, "dbfs": clip.dBFS}
+
+        import torch as _torch
+        get_speech_timestamps = utils[0]
+        tensor = _torch.from_numpy(samples)
+        try:
+            ts = get_speech_timestamps(tensor, vad, sampling_rate=16000)
+        except Exception as e:
+            logger.warning(f"VAD failed on clip: {e}")
+            return {"voiced_ratio": 1.0, "snr_db": 0.0, "dbfs": clip.dBFS}
+
+        if not ts:
+            return {"voiced_ratio": 0.0, "snr_db": -60.0, "dbfs": clip.dBFS}
+
+        mask = np.zeros(samples.shape[0], dtype=bool)
+        for seg in ts:
+            mask[seg["start"]:seg["end"]] = True
+
+        voiced = samples[mask]
+        unvoiced = samples[~mask]
+        voiced_ratio = voiced.size / samples.size
+
+        voiced_rms = float(np.sqrt(np.mean(voiced * voiced) + 1e-12)) if voiced.size else 1e-6
+        unvoiced_rms = float(np.sqrt(np.mean(unvoiced * unvoiced) + 1e-12)) if unvoiced.size else 1e-6
+        snr_db = 20.0 * np.log10(voiced_rms / max(unvoiced_rms, 1e-6))
+
+        return {"voiced_ratio": voiced_ratio, "snr_db": snr_db, "dbfs": clip.dBFS}
 
     def _load_model(self):
         """Lazy load the TTS model only when needed."""
@@ -48,7 +111,9 @@ class Synthesizer:
                     raise
 
     def extract_speaker_references(self, vocals_path, transcript, target_clips=3,
-                                    min_duration=5, max_duration=12):
+                                    min_duration=5, max_duration=12,
+                                    hq_vocals_path=None,
+                                    min_voiced_ratio=0.55):
         """
         Extract per-speaker reference clips for XTTS voice cloning. Each clip
         carries the emotion tag of the source segment (from the translated
@@ -60,11 +125,12 @@ class Synthesizer:
         """
         import json as _json
 
+        source_path = hq_vocals_path or vocals_path
         logger.info(
-            f"Extracting multi-reference samples from {vocals_path} "
+            f"Extracting multi-reference samples from {source_path} "
             f"(target: {target_clips} clips, min/max seg duration: {min_duration}/{max_duration}s)"
         )
-        audio = AudioSegment.from_wav(vocals_path)
+        audio = AudioSegment.from_wav(source_path)
         index_path = self.ref_audio_dir / "references.json"
 
         # Prefer the translated segments (which carry emotion); fall back to raw.
@@ -84,7 +150,7 @@ class Synthesizer:
         unique_speakers = {s["speaker"] for s in segments if s.get("speaker")}
 
         for speaker in unique_speakers:
-            candidates = []  # list of (dBFS, clip, emotion)
+            candidates = []  # list of (score_tuple, clip, emotion, metrics)
             for seg in segments:
                 if seg.get("speaker") != speaker:
                     continue
@@ -94,14 +160,23 @@ class Synthesizer:
                 clip = audio[int(seg["start"] * 1000):int(seg["end"] * 1000)]
                 if clip.dBFS <= -40:
                     continue
+                metrics = self._score_reference_clip(clip)
+                if metrics["voiced_ratio"] < min_voiced_ratio:
+                    continue
                 emotion = seg.get("emotion", "[NEUTRAL]") or "[NEUTRAL]"
-                candidates.append((clip.dBFS, clip, emotion))
+                # Rank primarily by SNR, tiebreak by voiced ratio, then loudness.
+                score = (metrics["snr_db"], metrics["voiced_ratio"], metrics["dbfs"])
+                candidates.append((score, clip, emotion, metrics))
 
             candidates.sort(key=lambda x: x[0], reverse=True)
             picked = candidates[:target_clips]
 
             entries = []
-            for i, (_, clip, emotion) in enumerate(picked):
+            for i, (score, clip, emotion, metrics) in enumerate(picked):
+                logger.info(
+                    f"  {speaker} ref {i}: voiced={metrics['voiced_ratio']:.2f} "
+                    f"snr={metrics['snr_db']:.1f}dB dBFS={metrics['dbfs']:.1f} emotion={emotion}"
+                )
                 # Encode emotion in filename so references are self-describing.
                 safe_emotion = emotion.strip("[]") or "NEUTRAL"
                 ref_path = self.ref_audio_dir / f"{speaker}_ref_{i}_{safe_emotion}.wav"

@@ -15,14 +15,36 @@ class AudioProcessor:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
     def extract_audio(self, video_path):
-        """Extracts the audio track from a video file."""
-        logger.info(f"Extracting audio from {video_path}...")
+        """Extract 16kHz mono audio for WhisperX / diarization."""
+        logger.info(f"Extracting ASR audio from {video_path}...")
         audio_path = self.temp_dir / "original_audio.wav"
         try:
             (
                 ffmpeg
                 .input(video_path)
                 .output(str(audio_path), acodec='pcm_s16le', ac=1, ar='16k')
+                .overwrite_output()
+                .run(quiet=True)
+            )
+            return audio_path
+        except ffmpeg.Error as e:
+            logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else e}")
+            raise
+
+    def extract_audio_hq(self, video_path):
+        """
+        Extract 44.1 kHz stereo audio for XTTS reference cloning.
+        XTTS v2 is trained on ~22 kHz+ and degrades noticeably on the 16 kHz
+        mono ASR track — so we keep two parallel tracks: one tuned for ASR,
+        one for voice cloning.
+        """
+        logger.info(f"Extracting HQ audio from {video_path}...")
+        audio_path = self.temp_dir / "original_audio_hq.wav"
+        try:
+            (
+                ffmpeg
+                .input(video_path)
+                .output(str(audio_path), acodec='pcm_s16le', ac=2, ar='44100')
                 .overwrite_output()
                 .run(quiet=True)
             )

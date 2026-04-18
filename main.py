@@ -98,11 +98,24 @@ def main(video_path, target_lang="Spanish", hf_token=None, device=None, ollama_u
     # Demucs output paths
     vocals = temp_dir / "htdemucs" / "original_audio" / "vocals.wav"
     background = temp_dir / "htdemucs" / "original_audio" / "no_vocals.wav"
-    
+
     if not vocals.exists() or not background.exists():
         vocals, background = audio_proc.separate_vocals(orig_audio)
     else:
         logger.info(f"Skipping vocal separation, using existing: {vocals}")
+
+    # Parallel HQ track for XTTS reference cloning (44.1kHz stereo).
+    orig_audio_hq = temp_dir / "original_audio_hq.wav"
+    if not orig_audio_hq.exists():
+        orig_audio_hq = audio_proc.extract_audio_hq(video_path)
+    else:
+        logger.info(f"Skipping HQ audio extraction, using existing: {orig_audio_hq}")
+
+    vocals_hq = temp_dir / "htdemucs" / "original_audio_hq" / "vocals.wav"
+    if not vocals_hq.exists():
+        vocals_hq, _ = audio_proc.separate_vocals(orig_audio_hq)
+    else:
+        logger.info(f"Skipping HQ vocal separation, using existing: {vocals_hq}")
     
     # 3. Transcribe & Diarize
     transcript_path = project_dir / "transcript.json"
@@ -137,7 +150,7 @@ def main(video_path, target_lang="Spanish", hf_token=None, device=None, ollama_u
     # 5. Extract Speaker References
     synthesizer.ref_audio_dir = project_dir / "references"
     synthesizer.ref_audio_dir.mkdir(parents=True, exist_ok=True)
-    references = synthesizer.extract_speaker_references(vocals, transcript)
+    references = synthesizer.extract_speaker_references(vocals, transcript, hq_vocals_path=vocals_hq)
     
     # 6. Synthesize & Place Audio
     lang_map = {
