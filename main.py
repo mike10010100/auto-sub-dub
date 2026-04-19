@@ -207,6 +207,7 @@ def main(video_path, target_lang="Spanish", hf_token=None, device=None, ollama_u
 
     logger.info("Mixing final audio track...")
     background_audio = AudioSegment.from_wav(background)
+    dubbed_audio_track = audio_proc.match_loudness(dubbed_audio_track, vocals)
     final_mixed_audio = audio_proc.duck_audio(dubbed_audio_track, background_audio)
     
     final_audio_path = project_dir / "final_audio.wav"

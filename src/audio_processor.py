@@ -79,6 +79,45 @@ class AudioProcessor:
             logger.error(f"Demucs separation failed: {e}")
             raise
 
+    def match_loudness(self, target_segment, reference_path, max_gain_db=12.0):
+        """
+        Normalize `target_segment` (AudioSegment, the dubbed track) to match
+        the integrated loudness of `reference_path` (WAV, the original
+        isolated vocals) per EBU R128 / ITU-R BS.1770. Keeps the dub sitting
+        at the same subjective level as the source voice so ducking works on
+        matched material instead of fighting a too-quiet or too-loud dub.
+        """
+        import numpy as np
+        import pyloudnorm as pyln
+        from pydub import AudioSegment
+
+        def _seg_to_float(seg):
+            dtype_map = {1: np.int8, 2: np.int16, 4: np.int32}
+            dt = dtype_map.get(seg.sample_width, np.int16)
+            pk = float(2 ** (8 * seg.sample_width - 1))
+            arr = np.frombuffer(seg.raw_data, dtype=dt).astype(np.float32) / pk
+            if seg.channels == 2:
+                arr = arr.reshape(-1, 2)
+            return arr
+
+        ref_seg = AudioSegment.from_file(str(reference_path))
+        ref_arr = _seg_to_float(ref_seg)
+        ref_lufs = pyln.Meter(ref_seg.frame_rate).integrated_loudness(ref_arr)
+
+        tgt_arr = _seg_to_float(target_segment)
+        tgt_lufs = pyln.Meter(target_segment.frame_rate).integrated_loudness(tgt_arr)
+
+        if not np.isfinite(tgt_lufs) or not np.isfinite(ref_lufs):
+            logger.info(f"Loudness match skipped (ref={ref_lufs}, tgt={tgt_lufs}).")
+            return target_segment
+
+        gain_db = float(np.clip(ref_lufs - tgt_lufs, -max_gain_db, max_gain_db))
+        logger.info(
+            f"Loudness match: ref={ref_lufs:.1f} LUFS, dub={tgt_lufs:.1f} LUFS, "
+            f"applying {gain_db:+.1f} dB"
+        )
+        return target_segment.apply_gain(gain_db)
+
     def duck_audio(self, vocals, background, duck_db=-15,
                    threshold_db=-40, attack_ms=50, release_ms=400,
                    frame_ms=10):

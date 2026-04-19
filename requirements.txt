@@ -17,5 +17,6 @@ tqdm
 streamlit
 watchdog
 python-dotenv
+pyloudnorm
 transformers<4.45.0
 nvidia-cudnn-cu11==8.9.6.50
