@@ -7,3 +7,12 @@ __pycache__/
 *.mkv
 *.wav
 !sample_video.mp4
+
+# Tooling artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+auto_dub.log
+.claude/
