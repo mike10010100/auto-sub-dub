@@ -47,15 +47,27 @@ Build a fully local, open-source pipeline that takes a video file, isolates voca
 3. **Dependency Hardening:** Finalized a "Gold" `requirements.txt` that works on both ARM64 and x86_64.
 4. **Environment Awareness:** Explicit `.env` loading for seamless configuration.
 
-### Phase 7: Future Roadmap
-1. **Loudness Matching (EBU R128 / LUFS):** Normalize the synthesized dub track to the original vocal track's integrated loudness with `pyloudnorm` before ducking, so the dub sits at the same subjective level as the source voice.
-2. **Text Normalization Before TTS:** Expand numbers, dates, ordinals, and common acronyms into spoken form (`num2words` or a small Gemma pass) per target language. XTTS currently mangles "2025", "km", "Dr.", etc.
-3. **Subtitle Reconciliation:** When the input video carries a target-language subtitle stream (`mov_text` / `srt` / `ass`), extract it with FFmpeg, align to our diarized segments by timestamp, and pass both the source line and the professional translation to Gemma as "reconcile these." Narrow applicability (maybe 10-20% of inputs) but produces best-in-class translation when it hits; dubtitles can be condensed so treat as reference, not gospel.
-4. **Visual Lip-Syncing:** Integrate **Wav2Lip** or **LivePortrait** to re-animate mouths to match the new audio. Largest perceptual leap; also the largest scope (model download, GPU cost, failure modes on non-frontal shots).
-5. **Diarization Robustness:** Merge over-split pyannote speakers via cosine similarity on speaker embeddings; re-verify speaker assignments near boundaries.
-6. **Reference Extraction Resilience:** Handle speakers with no segments in the ideal 3-15s window — widen the window, trim long monologue blobs to the XTTS sweet spot, and concatenate multiple short clips when needed. *Without this, side characters with only long or only very short segments get zero refs and go silent in the dub.*
-7. **Batch Processing:** Ability to queue multiple videos in the web dashboard.
-8. **Translation Editor:** Interactive UI to manually override LLM translations before synthesis.
+### Phase 7: Translation & Synthesis Quality (Completed)
+1. **Hybrid Two-Model Translation:** Audio-informed emotion tagging with `gemma4:e4b` (parallel) + sequential `gemma4:26b` text translation with a rolling ±5/+3 segment context window so pronouns, greetings, and callbacks resolve correctly.
+2. **Dual-Track Audio Pipeline:** Parallel 16 kHz mono (ASR/diarization) and 44.1 kHz stereo (XTTS reference cloning) tracks, with Demucs separation on each. XTTS quality degraded noticeably on the ASR-optimized track.
+3. **VAD + SNR Reference Ranking:** References are ranked by Silero VAD voiced-frame ratio + SNR estimate (not loudness), so music-heavy or low-voice clips don't poison the clone.
+4. **Reference Resilience:** Every diarized speaker gets a reference. Long monologue blobs are trimmed to the XTTS sweet spot; a fallback takes the longest available clip if no candidate passes the quality filters. No more silent side characters.
+5. **Natural-Pace Timing:** WSOLA time-stretching is floored at 1.0× (only speeds audio up, never below XTTS's natural pace). Placement windows steal silence from adjacent gaps (±1 s) to give TTS room without clamping.
+6. **Loudness Matching (EBU R128 / LUFS):** `pyloudnorm` measures the isolated vocals' integrated loudness and normalizes the dubbed track to match before sidechain ducking (clipped at ±12 dB).
+7. **Subtitle Reconciliation:** When the source video carries a target-language subtitle stream, extract via ffprobe/ffmpeg, align to diarized segments by timestamp overlap, and feed Gemma both the source line and the professional translation as a "strong hint, not gospel" reference. No-ops silently when no matching stream exists.
+
+### Phase 8: Productionization / Developer Experience (Completed)
+1. **Quality Gate (`mise run is-valid`):** `ruff format --check` + `ruff check` + `pytest --cov --cov-fail-under=90`. Mandatory before declaring any change done.
+2. **Scoped Coverage:** Coverage is measured on pure-logic modules (`src/utils.py`, `src/audio_processor.py`, `src/translator.py`, `src/timing.py`); model-bound IO is excluded via `# pragma: no cover` and exercised by the integration test instead of fragile mocks.
+3. **End-to-End Integration (`mise run integration`):** Optional real-model pipeline run on `sample_video.mp4`; verifies the final dubbed artifact has both video and audio streams.
+4. **AGENTS.md Contract:** Quality-gate contract, style rules (lazy imports for heavy deps, pragma discipline), and guidance on where to place new pure helpers to keep coverage honest.
+
+### Phase 9: Future Roadmap
+1. **Text Normalization Before TTS:** Expand numbers, dates, ordinals, and common acronyms into spoken form (`num2words` or a small Gemma pass) per target language. XTTS currently mangles "2025", "km", "Dr.", etc.
+2. **Visual Lip-Syncing:** Integrate **Wav2Lip** or **LivePortrait** to re-animate mouths to match the new audio. Largest perceptual leap; also the largest scope (model download, GPU cost, failure modes on non-frontal shots).
+3. **Diarization Robustness:** Merge over-split pyannote speakers via cosine similarity on speaker embeddings; re-verify speaker assignments near boundaries.
+4. **Batch Processing:** Ability to queue multiple videos in the web dashboard.
+5. **Translation Editor:** Interactive UI to manually override LLM translations before synthesis.
 
 ## Verification & Testing
 1. **Single-Speaker Test:** Verified with Spanish-to-English sample.
