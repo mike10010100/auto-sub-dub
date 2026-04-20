@@ -33,6 +33,28 @@ Auto-Dub is a modular Python application that performs the following steps:
 - **Mac Stability:** For XTTS v2 on ARM64, always force `cpu` to avoid hallucinations.
 
 ## Task Execution
-- `mise run install`: Installs all dependencies.
+- `mise run install`: Installs runtime dependencies.
+- `mise run install-dev`: Installs runtime + dev (ruff, pytest, pytest-cov) deps.
 - `mise run web`: Launches the Streamlit dashboard.
 - `mise run run -- <video.mp4> --lang <Language>`: Executes the CLI pipeline.
+- `mise run format`: Auto-format with ruff.
+- `mise run lint` / `mise run lint-fix`: Lint with ruff.
+- `mise run unit`: Run unit tests with coverage.
+- **`mise run is-valid`**: Format-check + lint + unit tests w/ 90% coverage gate. **REQUIRED before declaring any change done.**
+- `mise run integration`: End-to-end pipeline test against real models + Ollama. Optional — requires GPU/CPU headroom, a running Ollama with `gemma4:26b` + `gemma4:e4b`, a valid `HF_TOKEN`, and `sample_video.mp4` at the repo root.
+
+## Quality Gate (mandatory for agents)
+
+Before reporting any code change as complete, run `mise run is-valid` and fix everything it flags. It runs in order:
+
+1. `ruff format --check .` — formatting must be idempotent.
+2. `ruff check .` — lint rules (E, F, W, I, B, UP, C4, SIM) must pass.
+3. `pytest --cov --cov-fail-under=90` — unit tests must pass and branch coverage across the measured source (`src/utils.py`, `src/audio_processor.py`, `src/translator.py`, `src/timing.py`) must stay ≥ 90%.
+
+Coverage is deliberately scoped to pure-logic modules. Model-bound IO (`src/synthesizer.py`, `src/transcriber.py`, and method bodies marked `# pragma: no cover`) is exercised by `mise run integration`, not by the unit suite. When you add new pure-logic code, add tests for it — do not rely on integration to cover it.
+
+If you add a new pure helper, place it somewhere the coverage source list already measures (`src/timing.py`, `src/utils.py`, or a top-level function in `audio_processor.py` / `translator.py`). If you add a new module that needs coverage, include it in `[tool.coverage.run] source` in `pyproject.toml`.
+
+### Style notes
+- Lazy-import `torch`, `whisperx`, `TTS`, and other heavy deps inside functions rather than at module top, so test collection stays fast and coverage tracing doesn't clash with C extensions.
+- Mark IO / model-bound methods with `# pragma: no cover` and ensure the integration test exercises them.

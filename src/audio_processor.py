@@ -1,31 +1,53 @@
-import os
 import json
+import logging
 import re
 import subprocess
-import ffmpeg
-import demucs.separate
 from pathlib import Path
-import logging
+
+import ffmpeg
 
 logger = logging.getLogger(__name__)
 
 # Map the project's target-language display names to ISO 639-2/B codes
 # that FFmpeg / container subtitle streams typically carry.
 LANG_TO_ISO3 = {
-    "English": "eng", "Spanish": "spa", "French": "fra", "German": "deu",
-    "Italian": "ita", "Portuguese": "por", "Polish": "pol", "Turkish": "tur",
-    "Russian": "rus", "Dutch": "nld", "Czech": "ces", "Arabic": "ara",
-    "Chinese": "zho", "Japanese": "jpn", "Korean": "kor", "Hungarian": "hun",
+    "English": "eng",
+    "Spanish": "spa",
+    "French": "fra",
+    "German": "deu",
+    "Italian": "ita",
+    "Portuguese": "por",
+    "Polish": "pol",
+    "Turkish": "tur",
+    "Russian": "rus",
+    "Dutch": "nld",
+    "Czech": "ces",
+    "Arabic": "ara",
+    "Chinese": "zho",
+    "Japanese": "jpn",
+    "Korean": "kor",
+    "Hungarian": "hun",
     "Hindi": "hin",
 }
 # Containers sometimes tag streams with 639-2/T or a 2-letter code instead.
 LANG_ALIASES = {
-    "eng": {"eng", "en"}, "spa": {"spa", "es"}, "fra": {"fra", "fre", "fr"},
-    "deu": {"deu", "ger", "de"}, "ita": {"ita", "it"}, "por": {"por", "pt"},
-    "pol": {"pol", "pl"}, "tur": {"tur", "tr"}, "rus": {"rus", "ru"},
-    "nld": {"nld", "dut", "nl"}, "ces": {"ces", "cze", "cs"},
-    "ara": {"ara", "ar"}, "zho": {"zho", "chi", "zh"}, "jpn": {"jpn", "ja"},
-    "kor": {"kor", "ko"}, "hun": {"hun", "hu"}, "hin": {"hin", "hi"},
+    "eng": {"eng", "en"},
+    "spa": {"spa", "es"},
+    "fra": {"fra", "fre", "fr"},
+    "deu": {"deu", "ger", "de"},
+    "ita": {"ita", "it"},
+    "por": {"por", "pt"},
+    "pol": {"pol", "pl"},
+    "tur": {"tur", "tr"},
+    "rus": {"rus", "ru"},
+    "nld": {"nld", "dut", "nl"},
+    "ces": {"ces", "cze", "cs"},
+    "ara": {"ara", "ar"},
+    "zho": {"zho", "chi", "zh"},
+    "jpn": {"jpn", "ja"},
+    "kor": {"kor", "ko"},
+    "hun": {"hun", "hu"},
+    "hin": {"hin", "hi"},
 }
 
 
@@ -37,7 +59,7 @@ def _srt_time_to_seconds(ts):
 
 def parse_srt(path):
     """Parse an SRT file into [{'start','end','text'}, ...]."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         data = f.read()
     entries = []
     blocks = re.split(r"\n\s*\n", data.strip())
@@ -49,13 +71,13 @@ def parse_srt(path):
         timing_idx = 0 if "-->" in lines[0] else 1
         if timing_idx >= len(lines) or "-->" not in lines[timing_idx]:
             continue
-        start_s, end_s = [p.strip() for p in lines[timing_idx].split("-->")]
+        start_s, end_s = (p.strip() for p in lines[timing_idx].split("-->"))
         try:
             start = _srt_time_to_seconds(start_s)
             end = _srt_time_to_seconds(end_s)
         except ValueError:
             continue
-        text_lines = lines[timing_idx + 1:]
+        text_lines = lines[timing_idx + 1 :]
         # Strip ASS/SSA style tags ({\i1}), HTML tags, and speaker labels.
         text = " ".join(text_lines)
         text = re.sub(r"\{[^}]*\}", "", text)
@@ -65,6 +87,7 @@ def parse_srt(path):
             entries.append({"start": start, "end": end, "text": text})
     return entries
 
+
 class AudioProcessor:
     def __init__(self, output_dir="output"):
         self.output_dir = Path(output_dir)
@@ -72,15 +95,14 @@ class AudioProcessor:
         self.temp_dir = self.output_dir / "temp"
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
-    def extract_audio(self, video_path):
+    def extract_audio(self, video_path):  # pragma: no cover  (ffmpeg IO)
         """Extract 16kHz mono audio for WhisperX / diarization."""
         logger.info(f"Extracting ASR audio from {video_path}...")
         audio_path = self.temp_dir / "original_audio.wav"
         try:
             (
-                ffmpeg
-                .input(video_path)
-                .output(str(audio_path), acodec='pcm_s16le', ac=1, ar='16k')
+                ffmpeg.input(video_path)
+                .output(str(audio_path), acodec="pcm_s16le", ac=1, ar="16k")
                 .overwrite_output()
                 .run(quiet=True)
             )
@@ -89,7 +111,7 @@ class AudioProcessor:
             logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else e}")
             raise
 
-    def extract_audio_hq(self, video_path):
+    def extract_audio_hq(self, video_path):  # pragma: no cover  (ffmpeg IO)
         """
         Extract 44.1 kHz stereo audio for XTTS reference cloning.
         XTTS v2 is trained on ~22 kHz+ and degrades noticeably on the 16 kHz
@@ -100,9 +122,8 @@ class AudioProcessor:
         audio_path = self.temp_dir / "original_audio_hq.wav"
         try:
             (
-                ffmpeg
-                .input(video_path)
-                .output(str(audio_path), acodec='pcm_s16le', ac=2, ar='44100')
+                ffmpeg.input(video_path)
+                .output(str(audio_path), acodec="pcm_s16le", ac=2, ar="44100")
                 .overwrite_output()
                 .run(quiet=True)
             )
@@ -111,33 +132,33 @@ class AudioProcessor:
             logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else e}")
             raise
 
-    def separate_vocals(self, audio_path):
+    def separate_vocals(self, audio_path):  # pragma: no cover  (demucs subprocess)
         """Separates vocals from background audio using Demucs."""
         logger.info(f"Separating vocals using Demucs for {audio_path}...")
         # Demucs CLI is often easier to use directly from Python
         # We use the 'htdemucs' model by default
         try:
-            subprocess.run([
-                "demucs",
-                "--two-stems", "vocals",
-                "-o", str(self.temp_dir),
-                str(audio_path)
-            ], check=True)
-            
+            subprocess.run(
+                ["demucs", "--two-stems", "vocals", "-o", str(self.temp_dir), str(audio_path)],
+                check=True,
+            )
+
             # Demucs creates a folder structure: output/temp/htdemucs/original_audio/vocals.wav
             # and output/temp/htdemucs/original_audio/no_vocals.wav
             base_name = Path(audio_path).stem
             model_name = "htdemucs"
-            
+
             vocals_path = self.temp_dir / model_name / base_name / "vocals.wav"
             background_path = self.temp_dir / model_name / base_name / "no_vocals.wav"
-            
+
             return vocals_path, background_path
         except subprocess.CalledProcessError as e:
             logger.error(f"Demucs separation failed: {e}")
             raise
 
-    def extract_target_subtitles(self, video_path, target_lang):
+    def extract_target_subtitles(
+        self, video_path, target_lang
+    ):  # pragma: no cover  (ffprobe/ffmpeg IO)
         """
         If the source video carries a subtitle stream in `target_lang`,
         extract it to SRT in temp_dir. Used as a reconciliation hint for
@@ -154,9 +175,20 @@ class AudioProcessor:
 
         try:
             probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-print_format", "json",
-                 "-show_streams", "-select_streams", "s", str(video_path)],
-                check=True, capture_output=True, text=True,
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-print_format",
+                    "json",
+                    "-show_streams",
+                    "-select_streams",
+                    "s",
+                    str(video_path),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
             )
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             logger.warning(f"ffprobe failed, skipping subtitle reconciliation: {e}")
@@ -177,19 +209,35 @@ class AudioProcessor:
             return None
 
         out_path = self.temp_dir / f"subtitles_{iso}.srt"
-        logger.info(f"Extracting {target_lang} subtitle stream (index={match_idx}, codec={match_codec}) → {out_path}")
+        logger.info(
+            f"Extracting {target_lang} subtitle stream (index={match_idx}, codec={match_codec}) → {out_path}"
+        )
         try:
             subprocess.run(
-                ["ffmpeg", "-y", "-v", "error", "-i", str(video_path),
-                 "-map", f"0:{match_idx}", "-c:s", "srt", str(out_path)],
-                check=True, capture_output=True,
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-v",
+                    "error",
+                    "-i",
+                    str(video_path),
+                    "-map",
+                    f"0:{match_idx}",
+                    "-c:s",
+                    "srt",
+                    str(out_path),
+                ],
+                check=True,
+                capture_output=True,
             )
         except subprocess.CalledProcessError as e:
             logger.warning(f"Subtitle extraction failed: {e.stderr.decode() if e.stderr else e}")
             return None
         return out_path
 
-    def match_loudness(self, target_segment, reference_path, max_gain_db=12.0):
+    def match_loudness(
+        self, target_segment, reference_path, max_gain_db=12.0
+    ):  # pragma: no cover  (pyloudnorm + audio IO)
         """
         Normalize `target_segment` (AudioSegment, the dubbed track) to match
         the integrated loudness of `reference_path` (WAV, the original
@@ -228,9 +276,16 @@ class AudioProcessor:
         )
         return target_segment.apply_gain(gain_db)
 
-    def duck_audio(self, vocals, background, duck_db=-15,
-                   threshold_db=-40, attack_ms=50, release_ms=400,
-                   frame_ms=10):
+    def duck_audio(
+        self,
+        vocals,
+        background,
+        duck_db=-15,  # pragma: no cover  (audio IO)
+        threshold_db=-40,
+        attack_ms=50,
+        release_ms=400,
+        frame_ms=10,
+    ):
         """
         Sidechain-style ducking with smoothed envelope.
 
@@ -306,10 +361,12 @@ class AudioProcessor:
         target_len = bg_stereo.shape[0] if channels == 2 else bg_stereo.shape[0]
         if len(per_sample_gain) < target_len:
             tail = per_sample_gain[-1] if len(per_sample_gain) else 1.0
-            per_sample_gain = np.concatenate([
-                per_sample_gain,
-                np.full(target_len - len(per_sample_gain), tail, dtype=np.float32),
-            ])
+            per_sample_gain = np.concatenate(
+                [
+                    per_sample_gain,
+                    np.full(target_len - len(per_sample_gain), tail, dtype=np.float32),
+                ]
+            )
         per_sample_gain = per_sample_gain[:target_len]
 
         if channels == 2:
@@ -328,9 +385,11 @@ class AudioProcessor:
         )
         return vocals_aligned.overlay(ducked_seg)
 
+
 if __name__ == "__main__":
     # Test stub
     import sys
+
     if len(sys.argv) > 1:
         proc = AudioProcessor()
         orig_audio = proc.extract_audio(sys.argv[1])

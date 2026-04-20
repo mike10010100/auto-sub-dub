@@ -1,26 +1,42 @@
-import os
 import io
 import json
-import time
 import logging
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 
-from tqdm import tqdm
 from ollama import Client
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
 VALID_EMOTIONS = {
-    "[NEUTRAL]", "[WHISPER]", "[ANGRY]", "[EXCITED]",
-    "[SAD]", "[SARCASM]", "[FRIENDLY]", "[SHOUTING]",
+    "[NEUTRAL]",
+    "[WHISPER]",
+    "[ANGRY]",
+    "[EXCITED]",
+    "[SAD]",
+    "[SARCASM]",
+    "[FRIENDLY]",
+    "[SHOUTING]",
 }
 
 # Typical spoken-word rates used only for length budgeting, not precise timing.
 WORDS_PER_SECOND = {
-    "English": 2.5, "Spanish": 2.8, "French": 3.2, "German": 2.1,
-    "Italian": 3.0, "Portuguese": 2.7, "Polish": 2.4, "Turkish": 2.4,
-    "Russian": 2.3, "Dutch": 2.3, "Czech": 2.3, "Hungarian": 2.3,
-    "Hindi": 2.8, "Arabic": 2.4,
+    "English": 2.5,
+    "Spanish": 2.8,
+    "French": 3.2,
+    "German": 2.1,
+    "Italian": 3.0,
+    "Portuguese": 2.7,
+    "Polish": 2.4,
+    "Turkish": 2.4,
+    "Russian": 2.3,
+    "Dutch": 2.3,
+    "Czech": 2.3,
+    "Hungarian": 2.3,
+    "Hindi": 2.8,
+    "Arabic": 2.4,
 }
 # CJK languages use character counts instead.
 CHARS_PER_SECOND = {"Chinese": 5.5, "Japanese": 7.0, "Korean": 6.5}
@@ -53,7 +69,7 @@ class Translator:
         the emotion tag emitted by the audio pass.
     """
 
-    def __init__(self, ollama_url=None, model=None, audio_model=None):
+    def __init__(self, ollama_url=None, model=None, audio_model=None):  # pragma: no cover
         self.ollama_url = ollama_url or os.getenv("OLLAMA_URL", "http://localhost:11434")
         self.model = model or os.getenv("OLLAMA_MODEL", "gemma4:26b")
         self.audio_model = audio_model or os.getenv("OLLAMA_AUDIO_MODEL", "gemma4:e4b")
@@ -69,7 +85,7 @@ class Translator:
     MIN_AUDIO_MS = 2000
 
     @classmethod
-    def _clip_to_wav_bytes(cls, clip):
+    def _clip_to_wav_bytes(cls, clip):  # pragma: no cover  (pydub/audio IO)
         # Ollama's audio-via-images path requires 16 kHz mono WAV with a
         # full RIFF header. Raw PCM fails silently.
         from pydub import AudioSegment
@@ -84,7 +100,9 @@ class Translator:
         mono_16k.export(buf, format="wav")
         return buf.getvalue()
 
-    def _chat_with_retry(self, *, model, messages, options, attempts=3):
+    def _chat_with_retry(
+        self, *, model, messages, options, attempts=3
+    ):  # pragma: no cover  (Ollama IO)
         # Audio inference on Ollama is currently crash-prone (see #15333),
         # so retry with linear backoff.
         last_err = None
@@ -97,7 +115,7 @@ class Translator:
                 time.sleep(1.0 * (i + 1))
         raise last_err
 
-    def _tag_emotion(self, audio_bytes, original_text):
+    def _tag_emotion(self, audio_bytes, original_text):  # pragma: no cover  (Ollama IO)
         """Audio-informed emotion tag. Returns one of VALID_EMOTIONS."""
         system_prompt = (
             "You classify the emotional delivery of a short speech clip. "
@@ -174,20 +192,31 @@ class Translator:
                 hits.append(entry)
         return hits
 
-    def _translate_once(self, original_text, emotion, duration, target_lang, budget,
-                        stricter=False, context_block="", subtitle_hint=""):
+    def _translate_once(
+        self,
+        original_text,
+        emotion,
+        duration,
+        target_lang,
+        budget,  # pragma: no cover
+        stricter=False,
+        context_block="",
+        subtitle_hint="",
+    ):
         unit = "characters" if target_lang in CHARS_PER_SECOND else "words"
         extra = (
             " Your previous attempt was too long. Be MORE concise this time, "
             "drop filler, and keep only essential meaning."
-            if stricter else ""
+            if stricter
+            else ""
         )
         ctx_rule = (
             "5. Use the conversation context to disambiguate meaning. Resolve "
             "greetings vs. farewells, pronouns, gendered agreement, callbacks, "
             "and sarcasm from the surrounding lines. Translate ONLY the line "
             "marked '← TRANSLATE THIS LINE'.\n"
-            if context_block else ""
+            if context_block
+            else ""
         )
         sub_rule = (
             "6. A professional subtitle translation is provided as REFERENCE. "
@@ -195,7 +224,8 @@ class Translator:
             "as a strong hint for meaning and terminology, but prefer a natural "
             "spoken rendering of the full source line over a terse subtitle if "
             "the budget allows. Do not copy the subtitle verbatim.\n"
-            if subtitle_hint else ""
+            if subtitle_hint
+            else ""
         )
         system_prompt = (
             "<|think|>You are a professional video translator and voice director. "
@@ -207,17 +237,11 @@ class Translator:
             "and redundancy before exceeding this limit.\n"
             "3. Match the delivery implied by the provided emotion tag.\n"
             "4. Respond with ONLY a JSON object (after any thinking block): "
-            "{\"translated_text\": \"...\"}\n"
-            + ctx_rule
-            + sub_rule
-            + extra
+            '{"translated_text": "..."}\n' + ctx_rule + sub_rule + extra
         )
-        context_section = (
-            f"CONVERSATION CONTEXT:\n{context_block}\n\n" if context_block else ""
-        )
+        context_section = f"CONVERSATION CONTEXT:\n{context_block}\n\n" if context_block else ""
         sub_section = (
-            f"SUBTITLE REFERENCE ({target_lang}):\n{subtitle_hint}\n\n"
-            if subtitle_hint else ""
+            f"SUBTITLE REFERENCE ({target_lang}):\n{subtitle_hint}\n\n" if subtitle_hint else ""
         )
         user_msg = (
             f"{context_section}"
@@ -238,19 +262,32 @@ class Translator:
             content = content.split("<channel|>")[-1].strip()
         try:
             if "{" in content and "}" in content:
-                content = content[content.find("{"):content.rfind("}") + 1]
+                content = content[content.find("{") : content.rfind("}") + 1]
             data = json.loads(content)
             return (data.get("translated_text", "") or "").strip()
         except (json.JSONDecodeError, ValueError):
             return content.strip()
 
-    def _translate_text(self, original_text, emotion, duration, target_lang,
-                        context_block="", subtitle_hint="", overrun_ratio=1.2):
+    def _translate_text(
+        self,
+        original_text,
+        emotion,
+        duration,
+        target_lang,  # pragma: no cover
+        context_block="",
+        subtitle_hint="",
+        overrun_ratio=1.2,
+    ):
         """Translate; if the result wouldn't fit in the source window, retry once with a tighter budget."""
         budget = _length_budget(duration, target_lang, headroom=1.0)
         translated = self._translate_once(
-            original_text, emotion, duration, target_lang, budget,
-            context_block=context_block, subtitle_hint=subtitle_hint,
+            original_text,
+            emotion,
+            duration,
+            target_lang,
+            budget,
+            context_block=context_block,
+            subtitle_hint=subtitle_hint,
         )
         if not translated:
             return original_text
@@ -269,17 +306,27 @@ class Translator:
             f"shrinking budget {budget} → {new_budget}"
         )
         retry = self._translate_once(
-            original_text, emotion, duration, target_lang,
-            budget=new_budget, stricter=True, context_block=context_block,
+            original_text,
+            emotion,
+            duration,
+            target_lang,
+            budget=new_budget,
+            stricter=True,
+            context_block=context_block,
             subtitle_hint=subtitle_hint,
         )
         if retry and _estimate_spoken_duration(retry, target_lang) < est:
             return retry
         return translated
 
-    def translate_segments_multimodal(
-        self, segments, vocals_path, target_lang="English",
-        max_workers=2, context_before=5, context_after=3,
+    def translate_segments_multimodal(  # pragma: no cover  (orchestrates Ollama + audio)
+        self,
+        segments,
+        vocals_path,
+        target_lang="English",
+        max_workers=2,
+        context_before=5,
+        context_after=3,
         subtitle_entries=None,
     ):
         """
@@ -306,16 +353,18 @@ class Translator:
             original_text = (segment.get("text") or "").strip()
             if not original_text:
                 return idx, "[NEUTRAL]"
-            clip = audio[int(segment.get("start", 0) * 1000):int(segment.get("end", 0) * 1000)]
+            clip = audio[int(segment.get("start", 0) * 1000) : int(segment.get("end", 0) * 1000)]
             audio_bytes = self._clip_to_wav_bytes(clip)
             return idx, self._tag_emotion(audio_bytes, original_text)
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            tag_results = list(tqdm(
-                executor.map(tag_one, list(enumerate(segments))),
-                total=len(segments),
-                desc="Tagging emotion (audio)",
-            ))
+            tag_results = list(
+                tqdm(
+                    executor.map(tag_one, list(enumerate(segments))),
+                    total=len(segments),
+                    desc="Tagging emotion (audio)",
+                )
+            )
         emotions = {idx: tag for idx, tag in tag_results}
 
         # --- Pass 2: text translation sequentially with rolling context. ---
@@ -342,7 +391,10 @@ class Translator:
 
             try:
                 translated_text = self._translate_text(
-                    original_text, emotion, duration, target_lang,
+                    original_text,
+                    emotion,
+                    duration,
+                    target_lang,
                     context_block=context_block,
                     subtitle_hint=subtitle_hint,
                 )

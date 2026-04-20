@@ -1,0 +1,56 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["output", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
+ignore = [
+    "E501",  # line length (handled by formatter)
+    "B008",  # function-call-in-default-arg (AudioSegment/etc. in pydub patterns)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# dotenv must load before src/* imports so env vars are in place.
+"main.py" = ["E402"]
+"app.py" = ["E402"]
+# Heavy modules kept functional-first; stylistic lints wouldn't improve clarity.
+"src/transcriber.py" = ["SIM102"]
+"src/synthesizer.py" = ["B007", "SIM117"]
+"src/translator.py" = ["C416"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Unit runs exclude the integration dir; `mise run integration` targets it explicitly.
+addopts = "-ra -q --ignore=tests/integration"
+markers = [
+    "integration: end-to-end pipeline tests requiring models + Ollama + HF token",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+
+[tool.coverage.run]
+branch = true
+# Measure the whole `src` package, then exclude model-heavy modules so the
+# 90% gate reflects pure-logic code. Integration tests (`mise run integration`)
+# exercise the excluded paths end-to-end.
+source = ["src"]
+omit = [
+    "src/synthesizer.py",
+    "src/transcriber.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

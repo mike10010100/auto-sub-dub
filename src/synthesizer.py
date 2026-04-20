@@ -1,15 +1,17 @@
+import logging
 import os
+import tempfile
 from pathlib import Path
-from pydub import AudioSegment
+
 from audiotsm import wsola
 from audiotsm.io.wav import WavReader, WavWriter
-import tempfile
-import torch
+from pydub import AudioSegment
 from TTS.api import TTS
-import logging
+
 from src.utils import get_device
 
 logger = logging.getLogger(__name__)
+
 
 class Synthesizer:
     def __init__(self, output_dir="output/audio_segments", device=None):
@@ -17,17 +19,17 @@ class Synthesizer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ref_audio_dir = Path("output/references")
         self.ref_audio_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Determine device
         detected_device = device or get_device()
-        
+
         # Force CPU for XTTS on Mac (MPS is too unstable for this specific model)
         if detected_device == "mps":
             logger.info("XTTS v2 is unstable on MPS. Forcing CPU for high-quality synthesis.")
             self.device = "cpu"
         else:
             self.device = detected_device
-        
+
         logger.info(f"Initialized Synthesizer on {self.device}")
 
         self.model = None
@@ -40,6 +42,7 @@ class Synthesizer:
             return self._vad, self._vad_utils
         try:
             import torch as _torch
+
             vad, utils = _torch.hub.load(
                 repo_or_dir="snakers4/silero-vad",
                 model="silero_vad",
@@ -60,6 +63,7 @@ class Synthesizer:
         above residual background/noise.
         """
         import numpy as np
+
         vad, utils = self._load_vad()
         if vad is None:
             return {"voiced_ratio": 1.0, "snr_db": 0.0, "dbfs": clip.dBFS}
@@ -70,6 +74,7 @@ class Synthesizer:
             return {"voiced_ratio": 0.0, "snr_db": -60.0, "dbfs": clip.dBFS}
 
         import torch as _torch
+
         get_speech_timestamps = utils[0]
         tensor = _torch.from_numpy(samples)
         try:
@@ -83,14 +88,16 @@ class Synthesizer:
 
         mask = np.zeros(samples.shape[0], dtype=bool)
         for seg in ts:
-            mask[seg["start"]:seg["end"]] = True
+            mask[seg["start"] : seg["end"]] = True
 
         voiced = samples[mask]
         unvoiced = samples[~mask]
         voiced_ratio = voiced.size / samples.size
 
         voiced_rms = float(np.sqrt(np.mean(voiced * voiced) + 1e-12)) if voiced.size else 1e-6
-        unvoiced_rms = float(np.sqrt(np.mean(unvoiced * unvoiced) + 1e-12)) if unvoiced.size else 1e-6
+        unvoiced_rms = (
+            float(np.sqrt(np.mean(unvoiced * unvoiced) + 1e-12)) if unvoiced.size else 1e-6
+        )
         snr_db = 20.0 * np.log10(voiced_rms / max(unvoiced_rms, 1e-6))
 
         return {"voiced_ratio": voiced_ratio, "snr_db": snr_db, "dbfs": clip.dBFS}
@@ -106,15 +113,23 @@ class Synthesizer:
                 if self.device == "mps":
                     logger.warning(f"Failed to load XTTS on MPS: {e}. Falling back to CPU.")
                     self.device = "cpu"
-                    self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
+                    self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(
+                        self.device
+                    )
                 else:
                     raise
 
-    def extract_speaker_references(self, vocals_path, transcript, target_clips=3,
-                                    min_duration=3, max_duration=20,
-                                    trim_to=12.0,
-                                    hq_vocals_path=None,
-                                    min_voiced_ratio=0.55):
+    def extract_speaker_references(
+        self,
+        vocals_path,
+        transcript,
+        target_clips=3,
+        min_duration=3,
+        max_duration=20,
+        trim_to=12.0,
+        hq_vocals_path=None,
+        min_voiced_ratio=0.55,
+    ):
         """
         Extract per-speaker reference clips for XTTS voice cloning. Each clip
         carries the emotion tag of the source segment (from the translated
@@ -226,7 +241,9 @@ class Synthesizer:
             return matches
         return [r["path"] for r in speaker_refs]
 
-    def synthesize(self, text, speaker_id, speaker_refs, output_filename, language="en", emotion=None):
+    def synthesize(
+        self, text, speaker_id, speaker_refs, output_filename, language="en", emotion=None
+    ):
         """
         Synthesize text via XTTS v2. `speaker_refs` is the list of
         {"path":..., "emotion":...} dicts returned by extract_speaker_references.
@@ -259,18 +276,19 @@ class Synthesizer:
 
     def adjust_speed(self, audio_path, target_duration):
         """Adjusts the speed of an audio file to match the target duration without changing pitch."""
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_in, \
-             tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_out:
-            
+        with (
+            tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_in,
+            tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_out,
+        ):
             # Save the path
             temp_in_path = temp_in.name
             temp_out_path = temp_out.name
-            
+
             # Load and export to temporary file to ensure correct format for audiotsm
             audio = AudioSegment.from_file(audio_path)
             current_duration = audio.duration_seconds
             audio.export(temp_in_path, format="wav")
-            
+
             speed_ratio = current_duration / target_duration
 
             # Floor at 1.0 — never slow the dub below XTTS's natural pace
@@ -280,21 +298,22 @@ class Synthesizer:
             if speed_ratio < 1.0 or speed_ratio > 2.0:
                 logger.info(f"Speed ratio {speed_ratio:.2f} clipped to [1.0, 2.0].")
                 speed_ratio = max(1.0, min(2.0, speed_ratio))
-            
+
             with WavReader(temp_in_path) as reader:
                 with WavWriter(temp_out_path, reader.channels, reader.samplerate) as writer:
                     tsm = wsola(reader.channels, speed=speed_ratio)
                     tsm.run(reader, writer)
-            
+
             # Load adjusted audio and export back to original path
             final_audio = AudioSegment.from_wav(temp_out_path)
             final_audio.export(audio_path, format="wav")
-            
+
             # Clean up
             os.unlink(temp_in_path)
             os.unlink(temp_out_path)
-            
+
             return audio_path
+
 
 if __name__ == "__main__":
     # Test stub

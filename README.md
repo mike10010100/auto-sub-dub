@@ -65,6 +65,28 @@ mise run run -- your_video.mp4 --lang "English" \
 
 The dubbed output will be saved in a per-video project folder in the `output/` directory.
 
+## Development
+
+Install dev tools (ruff, pytest, pytest-cov):
+
+```bash
+mise run install-dev
+```
+
+Before committing any change, run the validation gate:
+
+```bash
+mise run is-valid   # format-check + lint + unit tests with 90% coverage
+```
+
+Optional end-to-end test (requires models, Ollama, HF token, and `sample_video.mp4`):
+
+```bash
+mise run integration
+```
+
+See `AGENTS.md` for contributor guidelines and the quality-gate contract enforced on AI agent work.
+
 ## Hardware Requirements
 - **GPU:** 
   - **NVIDIA:** 10GB+ VRAM recommended (RTX 3080 or better).

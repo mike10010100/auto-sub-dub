@@ -5,6 +5,41 @@ python = "3.11"
 description = "Install project dependencies"
 run = "pip install -r requirements.txt"
 
+[tasks.install-dev]
+description = "Install project + dev (ruff, pytest, coverage) dependencies"
+run = "pip install -r requirements-dev.txt"
+
+[tasks.format]
+description = "Auto-format code with ruff"
+run = "ruff format ."
+
+[tasks.lint]
+description = "Lint with ruff (no fixes)"
+run = "ruff check ."
+
+[tasks."lint-fix"]
+description = "Lint with ruff and auto-fix where safe"
+run = "ruff check --fix ."
+
+[tasks.unit]
+description = "Run unit tests with coverage (fails under 90%)"
+run = "pytest --cov --cov-report=term-missing --cov-fail-under=90"
+
+[tasks."is-valid"]
+description = "Format-check + lint + unit tests w/ 90% coverage gate. Run before declaring work done."
+run = [
+    "ruff format --check .",
+    "ruff check .",
+    "pytest --cov --cov-report=term-missing --cov-fail-under=90",
+]
+
+[tasks.integration]
+description = "End-to-end pipeline test (requires models, Ollama, HF token, sample_video.mp4)"
+run = """
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(python -c 'import nvidia.cudnn as c; import os; print(os.path.join(c.__path__[0], "lib"))')
+pytest tests/integration -v -m integration
+"""
+
 [tasks.run]
 description = "Run the Auto-Dub pipeline"
 run = """
