@@ -1,4 +1,6 @@
 import os
+import json
+import re
 import subprocess
 import ffmpeg
 import demucs.separate
@@ -6,6 +8,62 @@ from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Map the project's target-language display names to ISO 639-2/B codes
+# that FFmpeg / container subtitle streams typically carry.
+LANG_TO_ISO3 = {
+    "English": "eng", "Spanish": "spa", "French": "fra", "German": "deu",
+    "Italian": "ita", "Portuguese": "por", "Polish": "pol", "Turkish": "tur",
+    "Russian": "rus", "Dutch": "nld", "Czech": "ces", "Arabic": "ara",
+    "Chinese": "zho", "Japanese": "jpn", "Korean": "kor", "Hungarian": "hun",
+    "Hindi": "hin",
+}
+# Containers sometimes tag streams with 639-2/T or a 2-letter code instead.
+LANG_ALIASES = {
+    "eng": {"eng", "en"}, "spa": {"spa", "es"}, "fra": {"fra", "fre", "fr"},
+    "deu": {"deu", "ger", "de"}, "ita": {"ita", "it"}, "por": {"por", "pt"},
+    "pol": {"pol", "pl"}, "tur": {"tur", "tr"}, "rus": {"rus", "ru"},
+    "nld": {"nld", "dut", "nl"}, "ces": {"ces", "cze", "cs"},
+    "ara": {"ara", "ar"}, "zho": {"zho", "chi", "zh"}, "jpn": {"jpn", "ja"},
+    "kor": {"kor", "ko"}, "hun": {"hun", "hu"}, "hin": {"hin", "hi"},
+}
+
+
+def _srt_time_to_seconds(ts):
+    h, m, rest = ts.split(":")
+    s, ms = rest.split(",")
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+
+def parse_srt(path):
+    """Parse an SRT file into [{'start','end','text'}, ...]."""
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        data = f.read()
+    entries = []
+    blocks = re.split(r"\n\s*\n", data.strip())
+    for block in blocks:
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            continue
+        # First line may be the numeric index; find the timing line.
+        timing_idx = 0 if "-->" in lines[0] else 1
+        if timing_idx >= len(lines) or "-->" not in lines[timing_idx]:
+            continue
+        start_s, end_s = [p.strip() for p in lines[timing_idx].split("-->")]
+        try:
+            start = _srt_time_to_seconds(start_s)
+            end = _srt_time_to_seconds(end_s)
+        except ValueError:
+            continue
+        text_lines = lines[timing_idx + 1:]
+        # Strip ASS/SSA style tags ({\i1}), HTML tags, and speaker labels.
+        text = " ".join(text_lines)
+        text = re.sub(r"\{[^}]*\}", "", text)
+        text = re.sub(r"<[^>]+>", "", text)
+        text = text.strip()
+        if text:
+            entries.append({"start": start, "end": end, "text": text})
+    return entries
 
 class AudioProcessor:
     def __init__(self, output_dir="output"):
@@ -78,6 +136,58 @@ class AudioProcessor:
         except subprocess.CalledProcessError as e:
             logger.error(f"Demucs separation failed: {e}")
             raise
+
+    def extract_target_subtitles(self, video_path, target_lang):
+        """
+        If the source video carries a subtitle stream in `target_lang`,
+        extract it to SRT in temp_dir. Used as a reconciliation hint for
+        translation, not as gospel (dubtitles are often condensed).
+
+        Returns the SRT path if a matching stream was found and extracted,
+        otherwise None.
+        """
+        iso = LANG_TO_ISO3.get(target_lang)
+        if not iso:
+            logger.info(f"No ISO mapping for '{target_lang}'; skipping sub extraction.")
+            return None
+        accepted = LANG_ALIASES.get(iso, {iso})
+
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-print_format", "json",
+                 "-show_streams", "-select_streams", "s", str(video_path)],
+                check=True, capture_output=True, text=True,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logger.warning(f"ffprobe failed, skipping subtitle reconciliation: {e}")
+            return None
+
+        streams = json.loads(probe.stdout or "{}").get("streams", [])
+        match_idx = None
+        match_codec = None
+        for s in streams:
+            tag = (s.get("tags") or {}).get("language", "").lower()
+            if tag in accepted:
+                match_idx = s.get("index")
+                match_codec = s.get("codec_name")
+                break
+
+        if match_idx is None:
+            logger.info(f"No '{target_lang}' ({iso}) subtitle stream found in source.")
+            return None
+
+        out_path = self.temp_dir / f"subtitles_{iso}.srt"
+        logger.info(f"Extracting {target_lang} subtitle stream (index={match_idx}, codec={match_codec}) → {out_path}")
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-v", "error", "-i", str(video_path),
+                 "-map", f"0:{match_idx}", "-c:s", "srt", str(out_path)],
+                check=True, capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Subtitle extraction failed: {e.stderr.decode() if e.stderr else e}")
+            return None
+        return out_path
 
     def match_loudness(self, target_segment, reference_path, max_gain_db=12.0):
         """

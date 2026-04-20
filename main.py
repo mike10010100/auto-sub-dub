@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Silence SpeechBrain noise
 logging.getLogger("speechbrain").setLevel(logging.ERROR)
 
-from src.audio_processor import AudioProcessor
+from src.audio_processor import AudioProcessor, parse_srt
 from src.transcriber import Transcriber
 from src.translator import Translator
 from src.synthesizer import Synthesizer
@@ -134,10 +134,20 @@ def main(video_path, target_lang="Spanish", hf_token=None, device=None, ollama_u
         # enough room for TTS to speak the translation at natural pace.
         audio_end_sec = len(AudioSegment.from_wav(orig_audio)) / 1000.0
         annotate_effective_windows(transcript["segments"], audio_end=audio_end_sec)
+
+        # Opportunistic: if the source video has a target-language subtitle
+        # stream, extract it as a translation hint for Gemma.
+        subtitle_entries = None
+        srt_path = audio_proc.extract_target_subtitles(video_path, target_lang)
+        if srt_path and srt_path.exists():
+            subtitle_entries = parse_srt(srt_path)
+            logger.info(f"Loaded {len(subtitle_entries)} {target_lang} subtitle entries as reconciliation hints.")
+
         translated_segments = translator.translate_segments_multimodal(
             transcript["segments"],
             vocals_path=vocals,
             target_lang=target_lang,
+            subtitle_entries=subtitle_entries,
         )
         transcript["translated_segments"] = translated_segments
         transcriber.save_transcript(transcript, translated_transcript_path)

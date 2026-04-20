@@ -156,8 +156,26 @@ class Translator:
                     lines.append(f"  [{j}] ({speaker}) {src}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _subs_for_segment(seg, subtitle_entries, min_overlap=0.3):
+        """
+        Return subtitle entries that overlap the diarized segment by at least
+        `min_overlap` seconds. Subs are a reference hint; we want to surface
+        the candidates and let Gemma pick what matters.
+        """
+        if not subtitle_entries:
+            return []
+        seg_start = seg.get("start", 0.0)
+        seg_end = seg.get("end", 0.0)
+        hits = []
+        for entry in subtitle_entries:
+            overlap = min(seg_end, entry["end"]) - max(seg_start, entry["start"])
+            if overlap >= min_overlap:
+                hits.append(entry)
+        return hits
+
     def _translate_once(self, original_text, emotion, duration, target_lang, budget,
-                        stricter=False, context_block=""):
+                        stricter=False, context_block="", subtitle_hint=""):
         unit = "characters" if target_lang in CHARS_PER_SECOND else "words"
         extra = (
             " Your previous attempt was too long. Be MORE concise this time, "
@@ -171,6 +189,14 @@ class Translator:
             "marked '← TRANSLATE THIS LINE'.\n"
             if context_block else ""
         )
+        sub_rule = (
+            "6. A professional subtitle translation is provided as REFERENCE. "
+            "It may be condensed or paraphrased for reading speed, so treat it "
+            "as a strong hint for meaning and terminology, but prefer a natural "
+            "spoken rendering of the full source line over a terse subtitle if "
+            "the budget allows. Do not copy the subtitle verbatim.\n"
+            if subtitle_hint else ""
+        )
         system_prompt = (
             "<|think|>You are a professional video translator and voice director. "
             f"Translate subtitles into {target_lang}.\n\n"
@@ -183,13 +209,19 @@ class Translator:
             "4. Respond with ONLY a JSON object (after any thinking block): "
             "{\"translated_text\": \"...\"}\n"
             + ctx_rule
+            + sub_rule
             + extra
         )
         context_section = (
             f"CONVERSATION CONTEXT:\n{context_block}\n\n" if context_block else ""
         )
+        sub_section = (
+            f"SUBTITLE REFERENCE ({target_lang}):\n{subtitle_hint}\n\n"
+            if subtitle_hint else ""
+        )
         user_msg = (
             f"{context_section}"
+            f"{sub_section}"
             f"Emotion: {emotion}. Target duration: {duration:.2f}s. "
             f"Budget: {budget} {unit}. Translate line: '{original_text}'"
         )
@@ -213,12 +245,12 @@ class Translator:
             return content.strip()
 
     def _translate_text(self, original_text, emotion, duration, target_lang,
-                        context_block="", overrun_ratio=1.2):
+                        context_block="", subtitle_hint="", overrun_ratio=1.2):
         """Translate; if the result wouldn't fit in the source window, retry once with a tighter budget."""
         budget = _length_budget(duration, target_lang, headroom=1.0)
         translated = self._translate_once(
             original_text, emotion, duration, target_lang, budget,
-            context_block=context_block,
+            context_block=context_block, subtitle_hint=subtitle_hint,
         )
         if not translated:
             return original_text
@@ -239,6 +271,7 @@ class Translator:
         retry = self._translate_once(
             original_text, emotion, duration, target_lang,
             budget=new_budget, stricter=True, context_block=context_block,
+            subtitle_hint=subtitle_hint,
         )
         if retry and _estimate_spoken_duration(retry, target_lang) < est:
             return retry
@@ -247,6 +280,7 @@ class Translator:
     def translate_segments_multimodal(
         self, segments, vocals_path, target_lang="English",
         max_workers=2, context_before=5, context_after=3,
+        subtitle_entries=None,
     ):
         """
         Two-pass translation:
@@ -258,10 +292,11 @@ class Translator:
         """
         from pydub import AudioSegment
 
+        sub_count = len(subtitle_entries) if subtitle_entries else 0
         logger.info(
             f"Translating {len(segments)} segments to {target_lang} "
             f"(audio-tag={self.audio_model}, translate={self.model}, "
-            f"ctx=-{context_before}/+{context_after})"
+            f"ctx=-{context_before}/+{context_after}, subs={sub_count})"
         )
         audio = AudioSegment.from_wav(vocals_path)
 
@@ -302,10 +337,14 @@ class Translator:
             ctx_hi = min(len(segments), idx + context_after + 1)
             context_block = self._format_context(segments, ctx_lo, ctx_hi, idx, completed)
 
+            sub_hits = self._subs_for_segment(segment, subtitle_entries or [])
+            subtitle_hint = " ".join(h["text"] for h in sub_hits).strip()
+
             try:
                 translated_text = self._translate_text(
                     original_text, emotion, duration, target_lang,
                     context_block=context_block,
+                    subtitle_hint=subtitle_hint,
                 )
             except Exception as e:
                 logger.error(f"Translation failed for segment {idx}: {e}")
