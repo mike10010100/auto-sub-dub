@@ -195,6 +195,13 @@ class BaseSynthesizer:
                 logger.info(f"Speed ratio {speed_ratio:.2f} clipped to [1.0, 2.0].")
                 speed_ratio = max(1.0, min(2.0, speed_ratio))
 
+            if abs(speed_ratio - 1.0) < 0.01:
+                logger.info("Speed ratio is ~1.0, skipping WSOLA to prevent artifacts.")
+                audio.export(audio_path, format="wav")
+                if os.path.exists(temp_in_path): os.unlink(temp_in_path)
+                if os.path.exists(temp_out_path): os.unlink(temp_out_path)
+                return audio_path
+
             try:
                 # Use a custom WavReader if needed, but standard should work if format is fixed
                 with WavReader(temp_in_path) as reader:
