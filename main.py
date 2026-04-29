@@ -223,7 +223,7 @@ def main(
         segment_audio = AudioSegment.from_wav(clip_path)
         
         # Apply a short fade to eliminate pops/clicks at the segment boundaries
-        fade_duration = min(10, len(segment_audio) // 2)
+        fade_duration = min(5, len(segment_audio) // 2)
         if fade_duration > 0:
             segment_audio = segment_audio.fade_in(fade_duration).fade_out(fade_duration)
 
