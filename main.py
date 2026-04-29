@@ -221,6 +221,12 @@ def main(
         synthesizer.adjust_speed(clip_path, target_duration)
 
         segment_audio = AudioSegment.from_wav(clip_path)
+        
+        # Apply a short fade to eliminate pops/clicks at the segment boundaries
+        fade_duration = min(20, len(segment_audio) // 2)
+        if fade_duration > 0:
+            segment_audio = segment_audio.fade_in(fade_duration).fade_out(fade_duration)
+
         start_ms = int(start_time * 1000)
         dubbed_audio_track = dubbed_audio_track.overlay(segment_audio, position=start_ms)
 

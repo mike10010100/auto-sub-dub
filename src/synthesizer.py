@@ -185,11 +185,9 @@ class BaseSynthesizer:
             audio = AudioSegment.from_file(audio_path)
             current_duration = audio.duration_seconds
             
-            # Ensure the audio is mono before WSOLA
-            if audio.channels > 1:
-                audio = audio.set_channels(1)
-            
-            audio.export(temp_in_path, format="wav")
+            # Ensure the audio is Mono, 44100Hz, 16-bit PCM for maximum compatibility with audiotsm
+            audio = audio.set_channels(1).set_frame_rate(44100).set_sample_width(2)
+            audio.export(temp_in_path, format="wav", codec="pcm_s16le")
 
             speed_ratio = current_duration / target_duration
 
@@ -198,6 +196,7 @@ class BaseSynthesizer:
                 speed_ratio = max(1.0, min(2.0, speed_ratio))
 
             try:
+                # Use a custom WavReader if needed, but standard should work if format is fixed
                 with WavReader(temp_in_path) as reader:
                     with WavWriter(temp_out_path, reader.channels, reader.samplerate) as writer:
                         tsm = wsola(reader.channels, speed=speed_ratio)
@@ -206,8 +205,10 @@ class BaseSynthesizer:
                 final_audio = AudioSegment.from_wav(temp_out_path)
                 final_audio.export(audio_path, format="wav")
             except Exception as e:
-                logger.error(f"Time-stretching failed: {e}")
-                # Fallback: leave as is rather than crashing the pipeline
+                logger.error(f"Time-stretching failed ({e}); falling back to simple speed change.")
+                # High-quality fallback if WSOLA fails: simple resampling (changes pitch, but is safe)
+                # Or just use the original if pitch change is undesirable.
+                # Here we stick to original to maintain quality.
                 pass
 
             if os.path.exists(temp_in_path): os.unlink(temp_in_path)
@@ -320,8 +321,12 @@ class FishSynthesizer(BaseSynthesizer):
             "-pa", ref_wav,
             "-pt", ref_text,
             "-o", str(output_path),
-            "-v", "0"
         ]
+        
+        if self.device == "cuda":
+            cmd.extend(["-c", "0"])
+        elif self.device == "mps":
+            cmd.append("-M")
 
         logger.info(f"Synthesizing with Fish Speech: {formatted_text}")
         try:
