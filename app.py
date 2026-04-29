@@ -90,6 +90,13 @@ with st.sidebar:
         help="Audio-informed emotion tagging model. Must be an E-variant of Gemma 4 (e2b/e4b).",
     )
 
+    engine = st.selectbox(
+        "Synthesis Engine",
+        ["xtts", "fish"],
+        index=0,
+        help="xtts: Fast zero-shot cloning (24kHz). fish: High-fidelity (44.1kHz) with emotion tagging (requires s2.cpp).",
+    )
+
     # Update environment variables for the pipeline call
     os.environ["OLLAMA_URL"] = ollama_url
     os.environ["OLLAMA_MODEL"] = ollama_model
@@ -106,6 +113,7 @@ Device: {device}
 Ollama: {ollama_url}
 Model: {ollama_model}
 Audio Model: {ollama_audio_model}
+Engine: {engine}
         """.strip()
         )
 
@@ -137,6 +145,7 @@ if uploaded_file is not None:
                     ollama_url=ollama_url,
                     ollama_model=ollama_model,
                     ollama_audio_model=ollama_audio_model,
+                    engine=engine,
                 )
 
                 status.update(label="Dubbing complete!", state="complete", expanded=False)

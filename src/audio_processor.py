@@ -141,6 +141,8 @@ class AudioProcessor:
             subprocess.run(
                 ["demucs", "--two-stems", "vocals", "-o", str(self.temp_dir), str(audio_path)],
                 check=True,
+                capture_output=True,
+                text=True,
             )
 
             # Demucs creates a folder structure: output/temp/htdemucs/original_audio/vocals.wav
@@ -153,8 +155,11 @@ class AudioProcessor:
 
             return vocals_path, background_path
         except subprocess.CalledProcessError as e:
-            logger.error(f"Demucs separation failed: {e}")
-            raise
+            logger.error(f"Demucs separation failed: {e.stderr if e.stderr else str(e)}")
+            raise RuntimeError(f"Demucs failed: {e.stderr if e.stderr else str(e)}") from e
+        except FileNotFoundError as e:
+            logger.error(f"Demucs executable not found. Is it installed and in PATH? {e}")
+            raise RuntimeError("Demucs executable not found. Please install demucs.") from e
 
     def extract_target_subtitles(
         self, video_path, target_lang
@@ -358,7 +363,7 @@ class AudioProcessor:
         per_sample_gain = np.repeat(gain_lin, win)
         # Align to the background's actual sample count (resampling can drift
         # by a few samples vs. the vocal-mono length).
-        target_len = bg_stereo.shape[0] if channels == 2 else bg_stereo.shape[0]
+        target_len = bg_stereo.shape[0]
         if len(per_sample_gain) < target_len:
             tail = per_sample_gain[-1] if len(per_sample_gain) else 1.0
             per_sample_gain = np.concatenate(

@@ -89,9 +89,9 @@ See `AGENTS.md` for contributor guidelines and the quality-gate contract enforce
 
 ## Hardware Requirements
 - **GPU:** 
-  - **NVIDIA:** 10GB+ VRAM recommended (RTX 3080 or better).
+  - **NVIDIA:** 10GB+ VRAM recommended (RTX 3080 or better). 10GB is sufficient for Fish Speech S2 Pro via the 4-bit GGUF engine.
   - **Apple Silicon:** M1 Pro or better recommended (16GB+ Unified Memory).
-- **Disk Space:** ~10-15GB for model weights.
+- **Disk Space:** ~10-15GB for model weights (+4GB if using Fish Speech).
 
 ## Troubleshooting
 - **Shutdown Errors (RuntimeError):** On some macOS systems, you may see a `RuntimeError: reentrant call` when closing the Streamlit dashboard with `Ctrl+C`. This is a known issue with Streamlit's internal signal handling and does not affect the correctness of your dubbing projects.
@@ -103,6 +103,11 @@ See `AGENTS.md` for contributor guidelines and the quality-gate contract enforce
 - `app.py`: Streamlit web dashboard.
 - `src/utils.py`: Hardware detection and compute utilities.
 - `src/audio_processor.py`: Audio extraction, vocal isolation, and ducking.
+- `src/transcriber.py`: Transcription and speaker diarization.
+- `src/translator.py`: Multimodal translation via Ollama.
+- `src/synthesizer.py`: Voice cloning and speed adjustment.
+ustment.
+lation, and ducking.
 - `src/transcriber.py`: Transcription and speaker diarization.
 - `src/translator.py`: Multimodal translation via Ollama.
 - `src/synthesizer.py`: Voice cloning and speed adjustment.

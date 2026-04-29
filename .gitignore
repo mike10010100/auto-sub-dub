@@ -16,3 +16,7 @@ htmlcov/
 .ruff_cache/
 auto_dub.log
 .claude/
+models/
+s2.cpp/
+test_audiotsm.py
+test_audiotsm_stereo.py

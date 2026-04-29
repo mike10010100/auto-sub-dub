@@ -1,6 +1,19 @@
 [tools]
 python = "3.11"
 
+[tasks."setup-fish"]
+description = "Setup Fish Speech S2 Pro (clone s2.cpp, build it, and download GGUF models)"
+run = """
+if [ ! -d "s2.cpp" ]; then
+    git clone --recurse-submodules https://github.com/rodrigomatta/s2.cpp.git
+fi
+cd s2.cpp
+cmake -B build -DS2_CUDA=ON
+cmake --build build --config Release
+cd ..
+python scripts/download_fish_models.py
+"""
+
 [tasks.install]
 description = "Install project dependencies"
 run = "pip install -r requirements.txt"

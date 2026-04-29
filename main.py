@@ -38,6 +38,7 @@ def main(
     ollama_url=None,
     ollama_model=None,
     ollama_audio_model=None,
+    engine="xtts",
 ):  # pragma: no cover
     # 1. Initialize components
     video_name = Path(video_path).stem
@@ -62,7 +63,7 @@ def main(
     translator = Translator(
         ollama_url=ollama_url, model=ollama_model, audio_model=ollama_audio_model
     )
-    synthesizer = Synthesizer(output_dir=audio_segments_dir, device=device)
+    synthesizer = Synthesizer(engine=engine, output_dir=audio_segments_dir, device=device)
 
     # 2. Process Audio
     orig_audio = temp_dir / "original_audio.wav"
@@ -175,8 +176,18 @@ def main(
         start_time = segment.get("effective_start", segment.get("start"))
         end_time = segment.get("effective_end", segment.get("end"))
 
-        if not speaker or not text or speaker not in references:
+        if not text:
             continue
+
+        if not speaker or speaker not in references:
+            if references:
+                speaker = list(references.keys())[0]
+                logger.warning(
+                    f"Speaker missing or no references for segment {i}. Falling back to speaker {speaker}."
+                )
+            else:
+                logger.warning(f"No references available at all, skipping segment {i}.")
+                continue
 
         clip_name = f"segment_{i}_{speaker}.wav"
         clip_path = audio_segments_dir / clip_name
@@ -226,27 +237,33 @@ def main(
 
     logger.info(f"Remuxing final video to {video_output_path}...")
 
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(video_path),
-            "-i",
-            str(final_audio_path),
-            "-map",
-            "0:v",
-            "-map",
-            "1:a",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-shortest",
-            str(video_output_path),
-        ],
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(video_path),
+                "-i",
+                str(final_audio_path),
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-shortest",
+                str(video_output_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg remuxing failed: {e.stderr if e.stderr else str(e)}")
+        raise RuntimeError(f"FFmpeg failed during remuxing: {e.stderr if e.stderr else str(e)}") from e
 
     logger.info(f"Auto-Dubbing Complete! Output: {video_output_path}")
 
@@ -265,6 +282,9 @@ if __name__ == "__main__":
         "--ollama_audio_model",
         help="Ollama model for audio-informed emotion tagging (e.g. gemma4:e4b)",
     )
+    parser.add_argument(
+        "--engine", default="xtts", choices=["xtts", "fish"], help="Synthesis engine to use"
+    )
 
     args = parser.parse_args()
     main(
@@ -275,4 +295,5 @@ if __name__ == "__main__":
         ollama_url=args.ollama_url,
         ollama_model=args.ollama_model,
         ollama_audio_model=args.ollama_audio_model,
+        engine=args.engine,
     )

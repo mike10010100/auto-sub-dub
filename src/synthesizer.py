@@ -1,38 +1,26 @@
+import json
 import logging
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
 from audiotsm import wsola
 from audiotsm.io.wav import WavReader, WavWriter
 from pydub import AudioSegment
-from TTS.api import TTS
 
 from src.utils import get_device
 
 logger = logging.getLogger(__name__)
 
 
-class Synthesizer:
+class BaseSynthesizer:
     def __init__(self, output_dir="output/audio_segments", device=None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ref_audio_dir = Path("output/references")
         self.ref_audio_dir.mkdir(parents=True, exist_ok=True)
-
-        # Determine device
-        detected_device = device or get_device()
-
-        # Force CPU for XTTS on Mac (MPS is too unstable for this specific model)
-        if detected_device == "mps":
-            logger.info("XTTS v2 is unstable on MPS. Forcing CPU for high-quality synthesis.")
-            self.device = "cpu"
-        else:
-            self.device = detected_device
-
-        logger.info(f"Initialized Synthesizer on {self.device}")
-
-        self.model = None
+        self.device = device or get_device()
         self._vad = None
         self._vad_utils = None
 
@@ -57,10 +45,8 @@ class Synthesizer:
 
     def _score_reference_clip(self, clip):
         """
-        Score a candidate reference clip for XTTS cloning. Returns a dict with
-        voiced_ratio, snr_db, dbfs. VAD gates out clips that are mostly music
-        or silence after Demucs; SNR favors clips where the voice sits well
-        above residual background/noise.
+        Score a candidate reference clip for cloning. Returns a dict with
+        voiced_ratio, snr_db, dbfs.
         """
         import numpy as np
 
@@ -102,23 +88,6 @@ class Synthesizer:
 
         return {"voiced_ratio": voiced_ratio, "snr_db": snr_db, "dbfs": clip.dBFS}
 
-    def _load_model(self):
-        """Lazy load the TTS model only when needed."""
-        if self.model is None:
-            logger.info(f"Loading XTTS v2 model on {self.device}...")
-            try:
-                # We use XTTS v2 for expressive zero-shot voice cloning
-                self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
-            except Exception as e:
-                if self.device == "mps":
-                    logger.warning(f"Failed to load XTTS on MPS: {e}. Falling back to CPU.")
-                    self.device = "cpu"
-                    self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(
-                        self.device
-                    )
-                else:
-                    raise
-
     def extract_speaker_references(
         self,
         vocals_path,
@@ -131,16 +100,9 @@ class Synthesizer:
         min_voiced_ratio=0.55,
     ):
         """
-        Extract per-speaker reference clips for XTTS voice cloning. Each clip
-        carries the emotion tag of the source segment (from the translated
-        transcript) so synthesis can pick a clip that matches the target
-        emotion — XTTS's own `emotion=` kwarg doesn't meaningfully condition
-        output, but the reference-clip affect DOES carry through.
-
-        Returns: {speaker: [{"path": str, "emotion": str}, ...]}
+        Extract per-speaker reference clips for voice cloning.
+        Returns: {speaker: [{"path": str, "emotion": str, "text": str}, ...]}
         """
-        import json as _json
-
         source_path = hq_vocals_path or vocals_path
         logger.info(
             f"Extracting multi-reference samples from {source_path} "
@@ -149,13 +111,12 @@ class Synthesizer:
         audio = AudioSegment.from_wav(source_path)
         index_path = self.ref_audio_dir / "references.json"
 
-        # Prefer the translated segments (which carry emotion); fall back to raw.
-        segments = transcript.get("translated_segments") or transcript.get("segments", [])
+        # Use raw segments for references since they match the source audio timing
+        segments = transcript.get("segments", [])
 
-        # Resume from sidecar if present.
         if index_path.exists():
             try:
-                cached = _json.loads(index_path.read_text(encoding="utf-8"))
+                cached = json.loads(index_path.read_text(encoding="utf-8"))
                 if all(Path(c["path"]).exists() for clips in cached.values() for c in clips):
                     logger.info(f"Using cached references from {index_path}")
                     return cached
@@ -167,15 +128,12 @@ class Synthesizer:
 
         for speaker in unique_speakers:
             spk_segs = [s for s in segments if s.get("speaker") == speaker]
-            candidates = []  # list of (score_tuple, clip, emotion, metrics)
+            candidates = []
             for seg in spk_segs:
                 duration = seg["end"] - seg["start"]
                 if duration < min_duration:
                     continue
                 start_ms = int(seg["start"] * 1000)
-                # Trim long diarization blobs to the XTTS sweet spot rather
-                # than rejecting them outright — otherwise side characters
-                # whose only segments are 15-30s monologues get zero refs.
                 end_ms = int(min(seg["end"], seg["start"] + trim_to) * 1000)
                 clip = audio[start_ms:end_ms]
                 if clip.dBFS <= -40:
@@ -183,13 +141,12 @@ class Synthesizer:
                 metrics = self._score_reference_clip(clip)
                 if metrics["voiced_ratio"] < min_voiced_ratio:
                     continue
+                # Emotion might not be in raw segments, so we look it up in translated
+                # or just use NEUTRAL for reference extraction.
                 emotion = seg.get("emotion", "[NEUTRAL]") or "[NEUTRAL]"
                 score = (metrics["snr_db"], metrics["voiced_ratio"], metrics["dbfs"])
-                candidates.append((score, clip, emotion, metrics))
+                candidates.append((score, clip, emotion, seg.get("text", ""), metrics))
 
-            # Fallback: no clip passed the quality filters — don't let this
-            # speaker go silent in the dub. Take the longest segment,
-            # trim to the XTTS sweet spot, skip VAD gating, and accept it.
             if not candidates and spk_segs:
                 longest = max(spk_segs, key=lambda s: s["end"] - s["start"])
                 start_ms = int(longest["start"] * 1000)
@@ -197,71 +154,99 @@ class Synthesizer:
                 clip = audio[start_ms:end_ms]
                 metrics = self._score_reference_clip(clip)
                 emotion = longest.get("emotion", "[NEUTRAL]") or "[NEUTRAL]"
-                logger.warning(
-                    f"  {speaker}: no clips passed filters; falling back to "
-                    f"longest segment ({(longest['end']-longest['start']):.1f}s "
-                    f"trimmed to {trim_to}s, voiced={metrics['voiced_ratio']:.2f})"
-                )
                 score = (metrics["snr_db"], metrics["voiced_ratio"], metrics["dbfs"])
-                candidates.append((score, clip, emotion, metrics))
+                candidates.append((score, clip, emotion, longest.get("text", ""), metrics))
 
             candidates.sort(key=lambda x: x[0], reverse=True)
             picked = candidates[:target_clips]
 
             entries = []
-            for i, (score, clip, emotion, metrics) in enumerate(picked):
-                logger.info(
-                    f"  {speaker} ref {i}: voiced={metrics['voiced_ratio']:.2f} "
-                    f"snr={metrics['snr_db']:.1f}dB dBFS={metrics['dbfs']:.1f} emotion={emotion}"
-                )
-                # Encode emotion in filename so references are self-describing.
+            for i, (score, clip, emotion, text, metrics) in enumerate(picked):
                 safe_emotion = emotion.strip("[]") or "NEUTRAL"
                 ref_path = self.ref_audio_dir / f"{speaker}_ref_{i}_{safe_emotion}.wav"
                 clip.export(ref_path, format="wav")
-                entries.append({"path": str(ref_path), "emotion": emotion})
+                entries.append({"path": str(ref_path), "emotion": emotion, "text": text})
 
             if entries:
                 references[speaker] = entries
-                emotions_seen = sorted({e["emotion"] for e in entries})
-                logger.info(
-                    f"Saved {len(entries)} references for {speaker} "
-                    f"(emotions: {', '.join(emotions_seen)})"
-                )
 
-        index_path.write_text(_json.dumps(references, indent=2), encoding="utf-8")
+        index_path.write_text(json.dumps(references, indent=2), encoding="utf-8")
         return references
 
-    @staticmethod
-    def _select_references(speaker_refs, emotion):
-        """Pick the clips whose emotion matches; fall back to all clips."""
-        if not speaker_refs:
-            return []
-        matches = [r["path"] for r in speaker_refs if r["emotion"] == emotion]
-        if matches:
-            return matches
-        return [r["path"] for r in speaker_refs]
+    def adjust_speed(self, audio_path, target_duration):
+        """Adjusts the speed of an audio file to match the target duration without changing pitch."""
+        with (
+            tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_in,
+            tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_out,
+        ):
+            temp_in_path = temp_in.name
+            temp_out_path = temp_out.name
+
+            audio = AudioSegment.from_file(audio_path)
+            current_duration = audio.duration_seconds
+            
+            # Ensure the audio is mono before WSOLA
+            if audio.channels > 1:
+                audio = audio.set_channels(1)
+            
+            audio.export(temp_in_path, format="wav")
+
+            speed_ratio = current_duration / target_duration
+
+            if speed_ratio < 1.0 or speed_ratio > 2.0:
+                logger.info(f"Speed ratio {speed_ratio:.2f} clipped to [1.0, 2.0].")
+                speed_ratio = max(1.0, min(2.0, speed_ratio))
+
+            try:
+                with WavReader(temp_in_path) as reader:
+                    with WavWriter(temp_out_path, reader.channels, reader.samplerate) as writer:
+                        tsm = wsola(reader.channels, speed=speed_ratio)
+                        tsm.run(reader, writer)
+                
+                final_audio = AudioSegment.from_wav(temp_out_path)
+                final_audio.export(audio_path, format="wav")
+            except Exception as e:
+                logger.error(f"Time-stretching failed: {e}")
+                # Fallback: leave as is rather than crashing the pipeline
+                pass
+
+            if os.path.exists(temp_in_path): os.unlink(temp_in_path)
+            if os.path.exists(temp_out_path): os.unlink(temp_out_path)
+
+            return audio_path
+
+
+class XTTSSynthesizer(BaseSynthesizer):
+    def __init__(self, output_dir="output/audio_segments", device=None):
+        super().__init__(output_dir, device)
+        from TTS.api import TTS
+
+        # Force CPU for XTTS on Mac
+        if self.device == "mps":
+            logger.info("XTTS v2 is unstable on MPS. Forcing CPU for high-quality synthesis.")
+            self.device = "cpu"
+
+        self.model = None
+
+    def _load_model(self):
+        if self.model is None:
+            from TTS.api import TTS
+
+            logger.info(f"Loading XTTS v2 model on {self.device}...")
+            self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
 
     def synthesize(
         self, text, speaker_id, speaker_refs, output_filename, language="en", emotion=None
     ):
-        """
-        Synthesize text via XTTS v2. `speaker_refs` is the list of
-        {"path":..., "emotion":...} dicts returned by extract_speaker_references.
-        We pick the subset whose source-emotion matches `emotion`, so the
-        cloned voice naturally inherits that delivery — XTTS's own emotion
-        kwarg is effectively a no-op.
-        """
         self._load_model()
         output_path = self.output_dir / output_filename
-        ref_paths = self._select_references(speaker_refs, emotion)
+        ref_paths = [
+            r["path"] for r in speaker_refs if r["emotion"] == emotion
+        ] or [r["path"] for r in speaker_refs]
+
         if not ref_paths:
-            logger.error(f"No references available for {speaker_id}")
             return None
 
-        logger.info(
-            f"Synthesizing for {speaker_id} in {language} "
-            f"(Emotion: {emotion}, refs: {len(ref_paths)})"
-        )
         try:
             self.model.tts_to_file(
                 text=text,
@@ -271,52 +256,85 @@ class Synthesizer:
             )
             return output_path
         except Exception as e:
-            logger.error(f"TTS Synthesis failed for {speaker_id}: {e}")
+            logger.error(f"XTTS Synthesis failed: {e}")
             return None
 
-    def adjust_speed(self, audio_path, target_duration):
-        """Adjusts the speed of an audio file to match the target duration without changing pitch."""
-        with (
-            tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_in,
-            tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_out,
-        ):
-            # Save the path
-            temp_in_path = temp_in.name
-            temp_out_path = temp_out.name
 
-            # Load and export to temporary file to ensure correct format for audiotsm
-            audio = AudioSegment.from_file(audio_path)
-            current_duration = audio.duration_seconds
-            audio.export(temp_in_path, format="wav")
+class FishSynthesizer(BaseSynthesizer):
+    def __init__(
+        self,
+        output_dir="output/audio_segments",
+        device=None,
+        s2_cpp_path=None,
+        model_path="models/s2-pro-q4_k_m.gguf",
+        tokenizer_path="models/tokenizer.json",
+    ):
+        super().__init__(output_dir, device)
 
-            speed_ratio = current_duration / target_duration
+        # Check standard locations for s2 binary
+        candidates = [
+            "./s2.cpp/build/s2",
+            "../s2.cpp/build/s2",
+            "/usr/local/bin/s2",
+            "s2"
+        ]
 
-            # Floor at 1.0 — never slow the dub below XTTS's natural pace
-            # (sounds sluggish and unnatural), even if the target window is
-            # longer. Cap at 2.0 to avoid chipmunk speech when the window
-            # is very tight.
-            if speed_ratio < 1.0 or speed_ratio > 2.0:
-                logger.info(f"Speed ratio {speed_ratio:.2f} clipped to [1.0, 2.0].")
-                speed_ratio = max(1.0, min(2.0, speed_ratio))
+        if s2_cpp_path:
+            candidates.insert(0, s2_cpp_path)
 
-            with WavReader(temp_in_path) as reader:
-                with WavWriter(temp_out_path, reader.channels, reader.samplerate) as writer:
-                    tsm = wsola(reader.channels, speed=speed_ratio)
-                    tsm.run(reader, writer)
+        self.s2_cpp_path = None
+        for cand in candidates:
+            if cand == "s2": # Check PATH
+                if subprocess.run(["which", "s2"], capture_output=True).returncode == 0:
+                    self.s2_cpp_path = "s2"
+                    break
+            elif os.path.exists(cand):
+                self.s2_cpp_path = cand
+                break
 
-            # Load adjusted audio and export back to original path
-            final_audio = AudioSegment.from_wav(temp_out_path)
-            final_audio.export(audio_path, format="wav")
+        self.model_path = model_path
+        self.tokenizer_path = tokenizer_path
 
-            # Clean up
-            os.unlink(temp_in_path)
-            os.unlink(temp_out_path)
+        if not self.s2_cpp_path:
+            logger.error("s2.cpp binary not found in expected locations.")
+        else:
+            logger.info(f"Using Fish Speech binary: {self.s2_cpp_path}")
 
-            return audio_path
+    def synthesize(
+        self, text, speaker_id, speaker_refs, output_filename, language="en", emotion=None
+    ):
+        output_path = self.output_dir / output_filename
+        # Pick the best reference for Fish Speech
+        ref_entry = next((r for r in speaker_refs if r["emotion"] == emotion), speaker_refs[0])
+        ref_wav = ref_entry["path"]
+        ref_text = ref_entry.get("text", "")
+
+        # Format the text with emotion tags for Fish Speech
+        formatted_text = f"{emotion} {text}" if emotion and emotion.startswith("[") else text
+
+        cmd = [
+            self.s2_cpp_path,
+            "-m", self.model_path,
+            "-t", self.tokenizer_path,
+            "-text", formatted_text,
+            "-pa", ref_wav,
+            "-pt", ref_text,
+            "-o", str(output_path),
+            "-v", "0"
+        ]
+
+        logger.info(f"Synthesizing with Fish Speech: {formatted_text}")
+        try:
+            # We must use CUDA if possible. s2.cpp uses Vulkan/CUDA internally 
+            # if compiled with it.
+            subprocess.run(cmd, check=True, capture_output=True)
+            return output_path
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Fish Speech Synthesis failed: {e.stderr.decode()}")
+            return None
 
 
-if __name__ == "__main__":
-    # Test stub
-    logging.basicConfig(level=logging.INFO)
-    synth = Synthesizer()
-    logger.info("Synthesizer module loaded.")
+def Synthesizer(engine="xtts", **kwargs):
+    if engine == "fish":
+        return FishSynthesizer(**kwargs)
+    return XTTSSynthesizer(**kwargs)
