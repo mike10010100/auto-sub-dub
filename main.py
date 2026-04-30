@@ -39,6 +39,7 @@ def main(
     ollama_model=None,
     ollama_audio_model=None,
     engine="xtts",
+    **kwargs,
 ):  # pragma: no cover
     # 1. Initialize components
     video_name = Path(video_path).stem
@@ -231,7 +232,8 @@ def main(
         dubbed_audio_track = dubbed_audio_track.overlay(segment_audio, position=start_ms)
 
     # 7. Mix with background and Remux
-    video_output_path = project_dir / f"dubbed_{Path(video_path).name}"
+    # Force .mp4 output for maximum compatibility across players
+    video_output_path = project_dir / f"dubbed_{Path(video_path).stem}.mp4"
 
     logger.info("Mixing final audio track...")
     background_audio = AudioSegment.from_wav(background)
@@ -242,6 +244,11 @@ def main(
     final_mixed_audio.export(final_audio_path, format="wav")
 
     logger.info(f"Remuxing final video to {video_output_path}...")
+
+    # Choose audio codec based on extension
+    audio_codec = "aac"
+    if video_output_path.suffix.lower() == ".webm":
+        audio_codec = "libopus"
 
     try:
         subprocess.run(
@@ -259,7 +266,7 @@ def main(
                 "-c:v",
                 "copy",
                 "-c:a",
-                "aac",
+                audio_codec,
                 "-shortest",
                 str(video_output_path),
             ],
@@ -302,4 +309,11 @@ if __name__ == "__main__":
         ollama_model=args.ollama_model,
         ollama_audio_model=args.ollama_audio_model,
         engine=args.engine,
+    )
+      ollama_url=args.ollama_url,
+        ollama_model=args.ollama_model,
+        ollama_audio_model=args.ollama_audio_model,
+        engine=args.engine,
+        min_speakers=args.min_speakers,
+        max_speakers=args.max_speakers,
     )

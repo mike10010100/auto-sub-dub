@@ -1,5 +1,11 @@
 import json
 import logging
+import warnings
+
+# Silence standard warnings from heavy libraries
+warnings.filterwarnings("ignore", message="Passing `gradient_checkpointing` to a config initialization")
+warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
+warnings.filterwarnings("ignore", message="std\(\): degrees of freedom is <= 0")
 
 import whisperx
 
@@ -30,7 +36,7 @@ class Transcriber:
 
         logger.info(f"Initialized Transcriber on {self.device} (compute_type={self.compute_type})")
 
-    def transcribe(self, audio_path, batch_size=16):
+    def transcribe(self, audio_path, batch_size=16, min_speakers=None, max_speakers=None):
         """Transcribes the audio and performs speaker diarization."""
         logger.info(f"Transcribing {audio_path}...")
 
@@ -53,9 +59,7 @@ class Transcriber:
 
         # Truly global monkey-patch for hf_hub_download
         import sys
-
         import huggingface_hub
-
         original_download = huggingface_hub.hf_hub_download
 
         def patched_download(*args, **kwargs):
@@ -63,7 +67,6 @@ class Transcriber:
                 kwargs["token"] = kwargs.pop("use_auth_token")
             return original_download(*args, **kwargs)
 
-        # Patch it in the main module and every already-loaded module that might have it
         huggingface_hub.hf_hub_download = patched_download
         for name, mod in sys.modules.items():
             if name.startswith("pyannote") or name.startswith("whisperx"):
@@ -71,10 +74,17 @@ class Transcriber:
                     mod.hf_hub_download = patched_download
 
         try:
+            # Explicitly request the 3.1 model which is significantly more accurate
             diarize_model = whisperx.DiarizationPipeline(
-                use_auth_token=self.hf_token, device=self.device
+                model_name="pyannote/speaker-diarization-3.1",
+                use_auth_token=self.hf_token,
+                device=self.device
             )
-            diarize_segments = diarize_model(audio)
+            diarize_segments = diarize_model(
+                audio, 
+                min_speakers=min_speakers, 
+                max_speakers=max_speakers
+            )
         finally:
             # Restore
             huggingface_hub.hf_hub_download = original_download

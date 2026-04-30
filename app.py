@@ -97,6 +97,16 @@ with st.sidebar:
         help="xtts: Fast zero-shot cloning (24kHz). fish: High-fidelity (44.1kHz) with emotion tagging (requires s2.cpp).",
     )
 
+    col1, col2 = st.columns(2)
+    with col1:
+        min_speakers = st.number_input(
+            "Min Speakers", min_value=1, value=1, step=1, help="Force minimum number of speakers"
+        )
+    with col2:
+        max_speakers = st.number_input(
+            "Max Speakers", min_value=1, value=10, step=1, help="Limit maximum number of speakers"
+        )
+
     # Update environment variables for the pipeline call
     os.environ["OLLAMA_URL"] = ollama_url
     os.environ["OLLAMA_MODEL"] = ollama_model
@@ -114,6 +124,8 @@ Ollama: {ollama_url}
 Model: {ollama_model}
 Audio Model: {ollama_audio_model}
 Engine: {engine}
+Min Speakers: {min_speakers}
+Max Speakers: {max_speakers}
         """.strip()
         )
 
@@ -146,6 +158,8 @@ if uploaded_file is not None:
                     ollama_model=ollama_model,
                     ollama_audio_model=ollama_audio_model,
                     engine=engine,
+                    min_speakers=int(min_speakers),
+                    max_speakers=int(max_speakers),
                 )
 
                 status.update(label="Dubbing complete!", state="complete", expanded=False)
