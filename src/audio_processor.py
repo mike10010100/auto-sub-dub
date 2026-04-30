@@ -240,6 +240,69 @@ class AudioProcessor:
             return None
         return out_path
 
+    def noisegate(self, segment, threshold_db=-40):
+        """Simple noisegate to zero out samples below a threshold."""
+        import numpy as np
+        from pydub import AudioSegment
+
+        # Convert to numpy for fast processing
+        dtype_map = {1: np.int8, 2: np.int16, 4: np.int32}
+        dtype = dtype_map.get(segment.sample_width, np.int16)
+        peak = float(2 ** (8 * segment.sample_width - 1))
+
+        samples = np.frombuffer(segment.raw_data, dtype=dtype).astype(np.float32)
+        
+        # Simple windowed RMS gate
+        win_size = int(segment.frame_rate * 0.02) # 20ms windows
+        n_full = (len(samples) // win_size) * win_size
+        if n_full == 0:
+            return segment
+
+        frames = samples[:n_full].reshape(-1, win_size)
+        rms = np.sqrt(np.mean(frames * frames, axis=1) + 1e-12)
+        rms_db = 20 * np.log10(rms / peak + 1e-12)
+        
+        # Zero out frames below threshold
+        gate = np.where(rms_db > threshold_db, 1.0, 0.0).astype(np.float32)
+        
+        # Smooth gate transitions slightly to prevent clicks
+        gate_smoothed = np.repeat(gate, win_size)
+        
+        # Align lengths
+        if len(gate_smoothed) < len(samples):
+            gate_smoothed = np.concatenate([gate_smoothed, np.zeros(len(samples)-len(gate_smoothed))])
+        
+        samples_gated = samples * gate_smoothed[:len(samples)]
+        
+        return AudioSegment(
+            data=samples_gated.astype(dtype).tobytes(),
+            sample_width=segment.sample_width,
+            frame_rate=segment.frame_rate,
+            channels=segment.channels
+        )
+
+    def focus_vocals(self, audio_path):
+        """
+        Preprocessing step for diarization: apply a bandpass filter (human speech range)
+        and a noisegate to remove hiss/reverb that confuses the diarizer.
+        """
+        from pydub import AudioSegment
+        from pydub.scipy_effects import band-pass_filter # This might need fix or use high/low pass
+
+        logger.info(f"Applying Vocal Focus filter to {audio_path}...")
+        audio = AudioSegment.from_wav(audio_path)
+        
+        # Bandpass: Keep 100Hz to 8000Hz (standard human speech range)
+        # We use high_pass and low_pass sequentially for better compatibility
+        focused = audio.high_pass_filter(100).low_pass_filter(8000)
+        
+        # Apply noisegate to remove residual isolation artifacts/reverb
+        focused = self.noisegate(focused, threshold_db=-35)
+        
+        output_path = Path(str(audio_path).replace(".wav", "_focused.wav"))
+        focused.export(output_path, format="wav")
+        return output_path
+
     def match_loudness(
         self, target_segment, reference_path, max_gain_db=12.0
     ):  # pragma: no cover  (pyloudnorm + audio IO)

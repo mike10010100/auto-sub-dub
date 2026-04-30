@@ -98,8 +98,19 @@ def main(
     # 3. Transcribe & Diarize
     transcript_path = project_dir / "transcript.json"
     if not transcript_path.exists():
-        transcript = transcriber.transcribe(vocals)
+        # Apply Vocal Focus filter to clean up isolated audio for better diarization
+        vocals_focused = audio_proc.focus_vocals(vocals)
+
+        transcript = transcriber.transcribe(
+            vocals_focused,
+            min_speakers=kwargs.get("min_speakers"),
+            max_speakers=kwargs.get("max_speakers"),
+        )
         transcriber.save_transcript(transcript, transcript_path)
+
+        # Cleanup focused file to save space
+        if vocals_focused.exists() and vocals_focused != vocals:
+            vocals_focused.unlink()
     else:
         logger.info(f"Skipping transcription, using existing: {transcript_path}")
         with open(transcript_path, encoding="utf-8") as f:

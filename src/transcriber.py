@@ -96,6 +96,17 @@ class Transcriber:
         # 4. Merge results
         result = whisperx.assign_word_speakers(diarize_segments, result)
 
+        # 5. Filter micro-segments to improve stability and silence warnings
+        # Extremely short segments (< 200ms) are usually noise or isolation artifacts
+        original_count = len(result["segments"])
+        result["segments"] = [
+            s for s in result["segments"] 
+            if (s["end"] - s["start"]) >= 0.200
+        ]
+        
+        if len(result["segments"]) < original_count:
+            logger.info(f"Filtered {original_count - len(result['segments'])} micro-segments (<200ms).")
+
         return result
 
     def save_transcript(self, transcript, output_path):
