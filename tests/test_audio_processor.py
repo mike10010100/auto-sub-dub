@@ -100,6 +100,46 @@ def test_parse_srt_skips_bad_timestamps(tmp_path):
     assert entries == []
 
 
+def test_noisegate_zeros_silent_audio():
+    import numpy as np
+    from pydub import AudioSegment
+
+    ap = AudioProcessor()
+    # Create 1 second of silence (-inf dB)
+    silence = (
+        AudioSegment.silent(duration=1000, frame_rate=44100).set_channels(1).set_sample_width(2)
+    )
+    gated = ap.noisegate(silence, threshold_db=-40)
+
+    # Gated silence should still be silence
+    assert gated.dBFS == float("-inf")
+
+    # Create audio with a loud part and a quiet part
+    # 0.5s of -10dB sine wave, 0.5s of -60dB silence
+    duration = 1000
+    fs = 44100
+    t = np.linspace(0, duration / 1000, fs, endpoint=False)
+
+    # Loud part (-3dBFS approx)
+    loud_samples = (np.sin(2 * np.pi * 440 * t[: fs // 2]) * 32767 * 0.7).astype(np.int16)
+    # Quiet part (-100dBFS)
+    quiet_samples = np.zeros(fs - fs // 2, dtype=np.int16)
+
+    combined_samples = np.concatenate([loud_samples, quiet_samples])
+    audio = AudioSegment(combined_samples.tobytes(), frame_rate=fs, sample_width=2, channels=1)
+
+    # Apply gate at -40dB
+    gated_audio = ap.noisegate(audio, threshold_db=-40)
+
+    # Verify samples: first half should be preserved, second half should be zeroed
+    gated_samples = np.frombuffer(gated_audio.raw_data, dtype=np.int16)
+
+    # First 100ms should be roughly equal (minus windowing/smoothing effects)
+    assert np.max(np.abs(gated_samples[: fs // 4])) > 1000
+    # Last 100ms should be exactly zero
+    assert np.all(gated_samples[-fs // 4 :] == 0)
+
+
 def test_lang_aliases_contain_primary_iso():
     for iso, aliases in LANG_ALIASES.items():
         assert iso in aliases, f"{iso} should include itself in its alias set"

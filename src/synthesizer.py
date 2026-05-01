@@ -136,10 +136,11 @@ class BaseSynthesizer:
                 start_ms = int(seg["start"] * 1000)
                 end_ms = int(min(seg["end"], seg["start"] + trim_to) * 1000)
                 clip = audio[start_ms:end_ms]
-                if clip.dBFS <= -40:
+                # Relaxed thresholds: -45dBFS and 0.40 voiced ratio
+                if clip.dBFS <= -45:
                     continue
                 metrics = self._score_reference_clip(clip)
-                if metrics["voiced_ratio"] < min_voiced_ratio:
+                if metrics["voiced_ratio"] < 0.40:
                     continue
                 # Emotion might not be in raw segments, so we look it up in translated
                 # or just use NEUTRAL for reference extraction.
@@ -148,12 +149,16 @@ class BaseSynthesizer:
                 candidates.append((score, clip, emotion, seg.get("text", ""), metrics))
 
             if not candidates and spk_segs:
+                # Even more relaxed fallback for rare side-characters
                 longest = max(spk_segs, key=lambda s: s["end"] - s["start"])
                 start_ms = int(longest["start"] * 1000)
                 end_ms = int(min(longest["end"], longest["start"] + trim_to) * 1000)
                 clip = audio[start_ms:end_ms]
                 metrics = self._score_reference_clip(clip)
                 emotion = longest.get("emotion", "[NEUTRAL]") or "[NEUTRAL]"
+                logger.warning(
+                    f"  {speaker}: using low-quality fallback reference (voiced={metrics['voiced_ratio']:.2f})"
+                )
                 score = (metrics["snr_db"], metrics["voiced_ratio"], metrics["dbfs"])
                 candidates.append((score, clip, emotion, longest.get("text", ""), metrics))
 
@@ -169,6 +174,7 @@ class BaseSynthesizer:
 
             if entries:
                 references[speaker] = entries
+                logger.info(f"  {speaker}: extracted {len(entries)} reference clips.")
 
         index_path.write_text(json.dumps(references, indent=2), encoding="utf-8")
         return references
@@ -184,7 +190,7 @@ class BaseSynthesizer:
 
             audio = AudioSegment.from_file(audio_path)
             current_duration = audio.duration_seconds
-            
+
             # Ensure the audio is Mono, 44100Hz, 16-bit PCM for maximum compatibility with audiotsm
             audio = audio.set_channels(1).set_frame_rate(44100).set_sample_width(2)
             audio.export(temp_in_path, format="wav", codec="pcm_s16le")
@@ -198,8 +204,10 @@ class BaseSynthesizer:
             if abs(speed_ratio - 1.0) < 0.01:
                 logger.info("Speed ratio is ~1.0, skipping WSOLA to prevent artifacts.")
                 audio.export(audio_path, format="wav")
-                if os.path.exists(temp_in_path): os.unlink(temp_in_path)
-                if os.path.exists(temp_out_path): os.unlink(temp_out_path)
+                if os.path.exists(temp_in_path):
+                    os.unlink(temp_in_path)
+                if os.path.exists(temp_out_path):
+                    os.unlink(temp_out_path)
                 return audio_path
 
             try:
@@ -208,7 +216,7 @@ class BaseSynthesizer:
                     with WavWriter(temp_out_path, reader.channels, reader.samplerate) as writer:
                         tsm = wsola(reader.channels, speed=speed_ratio)
                         tsm.run(reader, writer)
-                
+
                 final_audio = AudioSegment.from_wav(temp_out_path)
                 final_audio.export(audio_path, format="wav")
             except Exception as e:
@@ -218,8 +226,10 @@ class BaseSynthesizer:
                 # Here we stick to original to maintain quality.
                 pass
 
-            if os.path.exists(temp_in_path): os.unlink(temp_in_path)
-            if os.path.exists(temp_out_path): os.unlink(temp_out_path)
+            if os.path.exists(temp_in_path):
+                os.unlink(temp_in_path)
+            if os.path.exists(temp_out_path):
+                os.unlink(temp_out_path)
 
             return audio_path
 
@@ -227,7 +237,6 @@ class BaseSynthesizer:
 class XTTSSynthesizer(BaseSynthesizer):
     def __init__(self, output_dir="output/audio_segments", device=None):
         super().__init__(output_dir, device)
-        from TTS.api import TTS
 
         # Force CPU for XTTS on Mac
         if self.device == "mps":
@@ -248,9 +257,9 @@ class XTTSSynthesizer(BaseSynthesizer):
     ):
         self._load_model()
         output_path = self.output_dir / output_filename
-        ref_paths = [
-            r["path"] for r in speaker_refs if r["emotion"] == emotion
-        ] or [r["path"] for r in speaker_refs]
+        ref_paths = [r["path"] for r in speaker_refs if r["emotion"] == emotion] or [
+            r["path"] for r in speaker_refs
+        ]
 
         if not ref_paths:
             return None
@@ -280,19 +289,14 @@ class FishSynthesizer(BaseSynthesizer):
         super().__init__(output_dir, device)
 
         # Check standard locations for s2 binary
-        candidates = [
-            "./s2.cpp/build/s2",
-            "../s2.cpp/build/s2",
-            "/usr/local/bin/s2",
-            "s2"
-        ]
+        candidates = ["./s2.cpp/build/s2", "../s2.cpp/build/s2", "/usr/local/bin/s2", "s2"]
 
         if s2_cpp_path:
             candidates.insert(0, s2_cpp_path)
 
         self.s2_cpp_path = None
         for cand in candidates:
-            if cand == "s2": # Check PATH
+            if cand == "s2":  # Check PATH
                 if subprocess.run(["which", "s2"], capture_output=True).returncode == 0:
                     self.s2_cpp_path = "s2"
                     break
@@ -322,14 +326,20 @@ class FishSynthesizer(BaseSynthesizer):
 
         cmd = [
             self.s2_cpp_path,
-            "-m", self.model_path,
-            "-t", self.tokenizer_path,
-            "-text", formatted_text,
-            "-pa", ref_wav,
-            "-pt", ref_text,
-            "-o", str(output_path),
+            "-m",
+            self.model_path,
+            "-t",
+            self.tokenizer_path,
+            "-text",
+            formatted_text,
+            "-pa",
+            ref_wav,
+            "-pt",
+            ref_text,
+            "-o",
+            str(output_path),
         ]
-        
+
         if self.device == "cuda":
             cmd.extend(["-c", "0"])
         elif self.device == "mps":
@@ -337,7 +347,7 @@ class FishSynthesizer(BaseSynthesizer):
 
         logger.info(f"Synthesizing with Fish Speech: {formatted_text}")
         try:
-            # We must use CUDA if possible. s2.cpp uses Vulkan/CUDA internally 
+            # We must use CUDA if possible. s2.cpp uses Vulkan/CUDA internally
             # if compiled with it.
             subprocess.run(cmd, check=True, capture_output=True)
             return output_path

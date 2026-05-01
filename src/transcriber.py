@@ -3,13 +3,15 @@ import logging
 import warnings
 
 # Silence standard warnings from heavy libraries
-warnings.filterwarnings("ignore", message="Passing `gradient_checkpointing` to a config initialization")
+warnings.filterwarnings(
+    "ignore", message="Passing `gradient_checkpointing` to a config initialization"
+)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
-warnings.filterwarnings("ignore", message="std\(\): degrees of freedom is <= 0")
+warnings.filterwarnings("ignore", message=r"std\(\): degrees of freedom is <= 0")
 
-import whisperx
+import whisperx  # noqa: E402
 
-from src.utils import get_compute_type, get_device
+from src.utils import get_compute_type, get_device  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,9 @@ class Transcriber:
 
         # Truly global monkey-patch for hf_hub_download
         import sys
+
         import huggingface_hub
+
         original_download = huggingface_hub.hf_hub_download
 
         def patched_download(*args, **kwargs):
@@ -78,12 +82,10 @@ class Transcriber:
             diarize_model = whisperx.DiarizationPipeline(
                 model_name="pyannote/speaker-diarization-3.1",
                 use_auth_token=self.hf_token,
-                device=self.device
+                device=self.device,
             )
             diarize_segments = diarize_model(
-                audio, 
-                min_speakers=min_speakers, 
-                max_speakers=max_speakers
+                audio, min_speakers=min_speakers, max_speakers=max_speakers
             )
         finally:
             # Restore
@@ -97,15 +99,17 @@ class Transcriber:
         result = whisperx.assign_word_speakers(diarize_segments, result)
 
         # 5. Filter micro-segments to improve stability and silence warnings
-        # Extremely short segments (< 200ms) are usually noise or isolation artifacts
+        # Extremely short segments (< 100ms) are usually noise or isolation artifacts
         original_count = len(result["segments"])
-        result["segments"] = [
-            s for s in result["segments"] 
-            if (s["end"] - s["start"]) >= 0.200
-        ]
-        
+        result["segments"] = [s for s in result["segments"] if (s["end"] - s["start"]) >= 0.100]
+
+        unique_speakers = sorted({s.get("speaker") for s in result["segments"] if s.get("speaker")})
+        logger.info(f"Diarization found {len(unique_speakers)} unique speakers: {', '.join(unique_speakers)}")
+
         if len(result["segments"]) < original_count:
-            logger.info(f"Filtered {original_count - len(result['segments'])} micro-segments (<200ms).")
+            logger.info(
+                f"Filtered {original_count - len(result['segments'])} micro-segments (<100ms)."
+            )
 
         return result
 

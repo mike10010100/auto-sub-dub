@@ -108,6 +108,11 @@ def main(
         )
         transcriber.save_transcript(transcript, transcript_path)
 
+        unique_speakers = sorted({s.get("speaker") for s in transcript["segments"] if s.get("speaker")})
+        logger.info(f"Diarization complete. Found {len(unique_speakers)} speakers.")
+        if len(unique_speakers) <= 1 and not (kwargs.get("min_speakers") or kwargs.get("max_speakers")):
+            logger.warning("Only one speaker detected. If this is incorrect, try running with --min_speakers.")
+
         # Cleanup focused file to save space
         if vocals_focused.exists() and vocals_focused != vocals:
             vocals_focused.unlink()
@@ -115,6 +120,8 @@ def main(
         logger.info(f"Skipping transcription, using existing: {transcript_path}")
         with open(transcript_path, encoding="utf-8") as f:
             transcript = json.load(f)
+        unique_speakers = sorted({s.get("speaker") for s in transcript["segments"] if s.get("speaker")})
+        logger.info(f"Loaded transcript with {len(unique_speakers)} detected speakers.")
 
     # 4. Translate
     translated_transcript_path = project_dir / "transcript_translated.json"
@@ -180,9 +187,15 @@ def main(
     original_audio = AudioSegment.from_wav(orig_audio)
     dubbed_audio_track = AudioSegment.silent(duration=len(original_audio))
 
+    logger.info(f"Starting synthesis for {len(translated_segments)} segments using {engine} engine...")
+
     for i, segment in enumerate(translated_segments):
         speaker = segment.get("speaker")
         text = segment.get("text")
+        
+        # Log progress every 5 segments
+        if i % 5 == 0 or i == len(translated_segments) - 1:
+            logger.info(f"Processing segment {i+1}/{len(translated_segments)} (Speaker: {speaker})...")
         # Use the widened placement window if present; fall back to the
         # raw diarized boundaries for backward compatibility.
         start_time = segment.get("effective_start", segment.get("start"))
@@ -214,8 +227,12 @@ def main(
         clean_text = text.replace(emotion_tag, "").strip()
 
         if not clip_path.exists():
+            # Add a language hint to help Fish Speech reduce cross-lingual accent
+            lang_hint = f"[{target_lang.lower()}]"
+            full_text = f"{lang_hint} {clean_text}" if engine == "fish" else clean_text
+
             clip_path = synthesizer.synthesize(
-                clean_text,
+                full_text,
                 speaker,
                 references[speaker],
                 clip_name,
@@ -233,7 +250,7 @@ def main(
         synthesizer.adjust_speed(clip_path, target_duration)
 
         segment_audio = AudioSegment.from_wav(clip_path)
-        
+
         # Apply a short fade to eliminate pops/clicks at the segment boundaries
         fade_duration = min(5, len(segment_audio) // 2)
         if fade_duration > 0:
@@ -287,7 +304,9 @@ def main(
         )
     except subprocess.CalledProcessError as e:
         logger.error(f"FFmpeg remuxing failed: {e.stderr if e.stderr else str(e)}")
-        raise RuntimeError(f"FFmpeg failed during remuxing: {e.stderr if e.stderr else str(e)}") from e
+        raise RuntimeError(
+            f"FFmpeg failed during remuxing: {e.stderr if e.stderr else str(e)}"
+        ) from e
 
     logger.info(f"Auto-Dubbing Complete! Output: {video_output_path}")
 
@@ -309,6 +328,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--engine", default="xtts", choices=["xtts", "fish"], help="Synthesis engine to use"
     )
+    parser.add_argument("--min_speakers", type=int, help="Minimum number of speakers")
+    parser.add_argument("--max_speakers", type=int, help="Maximum number of speakers")
 
     args = parser.parse_args()
     main(
@@ -317,11 +338,6 @@ if __name__ == "__main__":
         hf_token=args.hf_token,
         device=args.device,
         ollama_url=args.ollama_url,
-        ollama_model=args.ollama_model,
-        ollama_audio_model=args.ollama_audio_model,
-        engine=args.engine,
-    )
-      ollama_url=args.ollama_url,
         ollama_model=args.ollama_model,
         ollama_audio_model=args.ollama_audio_model,
         engine=args.engine,
