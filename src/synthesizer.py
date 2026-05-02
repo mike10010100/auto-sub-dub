@@ -189,6 +189,20 @@ class BaseSynthesizer:
             temp_out_path = temp_out.name
 
             audio = AudioSegment.from_file(audio_path)
+
+            # 1. Strip leading/trailing silence from the synthesized clip.
+            # This is CRITICAL for sync. TTS often has a small leading delay.
+            from pydub.silence import detect_leading_silence
+
+            trim_leading = detect_leading_silence(audio, silence_threshold=-50)
+            trim_trailing = detect_leading_silence(audio.reverse(), silence_threshold=-50)
+
+            if trim_leading > 0 or trim_trailing > 0:
+                audio = audio[trim_leading : len(audio) - trim_trailing]
+                logger.info(
+                    f"Trimmed {trim_leading}ms leading and {trim_trailing}ms trailing silence."
+                )
+
             current_duration = audio.duration_seconds
 
             # Ensure the audio is Mono, 44100Hz, 16-bit PCM for maximum compatibility with audiotsm
@@ -221,9 +235,6 @@ class BaseSynthesizer:
                 final_audio.export(audio_path, format="wav")
             except Exception as e:
                 logger.error(f"Time-stretching failed ({e}); falling back to simple speed change.")
-                # High-quality fallback if WSOLA fails: simple resampling (changes pitch, but is safe)
-                # Or just use the original if pitch change is undesirable.
-                # Here we stick to original to maintain quality.
                 pass
 
             if os.path.exists(temp_in_path):
@@ -253,7 +264,14 @@ class XTTSSynthesizer(BaseSynthesizer):
             self.model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
 
     def synthesize(
-        self, text, speaker_id, speaker_refs, output_filename, language="en", emotion=None
+        self,
+        text,
+        speaker_id,
+        speaker_refs,
+        output_filename,
+        language="en",
+        emotion=None,
+        **kwargs,
     ):
         self._load_model()
         output_path = self.output_dir / output_filename
@@ -343,36 +361,18 @@ class FishSynthesizer(BaseSynthesizer):
             formatted_text,
             "-pa",
             ref_wav,
-            "-pt", ref_text,
-            "-o", str(output_path),
-            "-temp", str(temp),
-            "-top-p", str(top_p),
-            "-top-k", str(top_k),
+            "-pt",
+            ref_text,
+            "-o",
+            str(output_path),
+            "-temp",
+            str(temp),
+            "-top-p",
+            str(top_p),
+            "-top-k",
+            str(top_k),
             "--trim-silence",
-            ]
-
-
-        if self.device == "cuda":
-            cmd.extend(["-c", "0"])
-        elif self.device == "mps":
-            cmd.append("-M")
-
-        logger.info(f"Synthesizing with Fish Speech: {formatted_text}")
-        try:
-            # We must use CUDA if possible. s2.cpp uses Vulkan/CUDA internally
-            # if compiled with it.
-            subprocess.run(cmd, check=True, capture_output=True)
-            return output_path
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Fish Speech Synthesis failed: {e.stderr.decode()}")
-            return None
-
-
-def Synthesizer(engine="xtts", **kwargs):
-    if engine == "fish":
-        return FishSynthesizer(**kwargs)
-    return XTTSSynthesizer(**kwargs)
-  ]
+        ]
 
         if self.device == "cuda":
             cmd.extend(["-c", "0"])
@@ -381,8 +381,6 @@ def Synthesizer(engine="xtts", **kwargs):
 
         logger.info(f"Synthesizing with Fish Speech: {formatted_text}")
         try:
-            # We must use CUDA if possible. s2.cpp uses Vulkan/CUDA internally
-            # if compiled with it.
             subprocess.run(cmd, check=True, capture_output=True)
             return output_path
         except subprocess.CalledProcessError as e:
