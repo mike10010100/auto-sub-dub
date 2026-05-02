@@ -343,17 +343,36 @@ class FishSynthesizer(BaseSynthesizer):
             formatted_text,
             "-pa",
             ref_wav,
-            "-pt",
-            ref_text,
-            "-o",
-            str(output_path),
-            "-temp",
-            str(temp),
-            "-top-p",
-            str(top_p),
-            "-top-k",
-            str(top_k),
-        ]
+            "-pt", ref_text,
+            "-o", str(output_path),
+            "-temp", str(temp),
+            "-top-p", str(top_p),
+            "-top-k", str(top_k),
+            "--trim-silence",
+            ]
+
+
+        if self.device == "cuda":
+            cmd.extend(["-c", "0"])
+        elif self.device == "mps":
+            cmd.append("-M")
+
+        logger.info(f"Synthesizing with Fish Speech: {formatted_text}")
+        try:
+            # We must use CUDA if possible. s2.cpp uses Vulkan/CUDA internally
+            # if compiled with it.
+            subprocess.run(cmd, check=True, capture_output=True)
+            return output_path
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Fish Speech Synthesis failed: {e.stderr.decode()}")
+            return None
+
+
+def Synthesizer(engine="xtts", **kwargs):
+    if engine == "fish":
+        return FishSynthesizer(**kwargs)
+    return XTTSSynthesizer(**kwargs)
+  ]
 
         if self.device == "cuda":
             cmd.extend(["-c", "0"])

@@ -202,8 +202,9 @@ def main(
     # Pre-load original vocals for song preservation handling
     original_vocals = AudioSegment.from_wav(vocals)
 
-    logger.info(f"Starting synthesis for {len(translated_segments)} segments using {engine} engine...")
-
+    logger.info(
+        f"Starting synthesis for {len(translated_segments)} segments using {engine} engine..."
+    )
 
     # Sort segments by start time to ensure logical processing and overlap detection
     translated_segments.sort(key=lambda x: x.get("effective_start", x.get("start", 0)))
@@ -243,7 +244,7 @@ def main(
             start_ms = int(segment.get("start") * 1000)
             end_ms = int(segment.get("end") * 1000)
             song_clip = original_vocals[start_ms:end_ms]
-            
+
             start_ms_dub = int(start_time * 1000)
             dubbed_audio_track = dubbed_audio_track.overlay(song_clip, position=start_ms_dub)
             continue
