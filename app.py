@@ -107,6 +107,13 @@ with st.sidebar:
             "Max Speakers", min_value=1, value=10, step=1, help="Limit maximum number of speakers"
         )
 
+    st.divider()
+    st.subheader("Synthesis Quality (Fish Only)")
+    tts_temp = st.slider(
+        "Temperature", 0.1, 1.0, 0.7, 0.05, help="Higher = more variation, less accent mimicry"
+    )
+    tts_top_p = st.slider("Top-P", 0.1, 1.0, 0.8, 0.05, help="Higher = more diverse vocabulary")
+
     # Update environment variables for the pipeline call
     os.environ["OLLAMA_URL"] = ollama_url
     os.environ["OLLAMA_MODEL"] = ollama_model
@@ -126,6 +133,8 @@ Audio Model: {ollama_audio_model}
 Engine: {engine}
 Min Speakers: {min_speakers}
 Max Speakers: {max_speakers}
+TTS Temp: {tts_temp}
+TTS Top-P: {tts_top_p}
         """.strip()
         )
 
@@ -160,6 +169,8 @@ if uploaded_file is not None:
                     engine=engine,
                     min_speakers=int(min_speakers),
                     max_speakers=int(max_speakers),
+                    tts_temp=float(tts_temp),
+                    tts_top_p=float(tts_top_p),
                 )
 
                 status.update(label="Dubbing complete!", state="complete", expanded=False)

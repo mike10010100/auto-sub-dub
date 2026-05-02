@@ -109,7 +109,7 @@ def main(
         transcriber.save_transcript(transcript, transcript_path)
 
         unique_speakers = sorted({s.get("speaker") for s in transcript["segments"] if s.get("speaker")})
-        logger.info(f"Diarization complete. Found {len(unique_speakers)} speakers.")
+        logger.info(f"Diarization complete. Found {len(unique_speakers)} speakers: {', '.join(unique_speakers)}")
         if len(unique_speakers) <= 1 and not (kwargs.get("min_speakers") or kwargs.get("max_speakers")):
             logger.warning("Only one speaker detected. If this is incorrect, try running with --min_speakers.")
 
@@ -228,7 +228,11 @@ def main(
 
         if not clip_path.exists():
             # Add a language hint to help Fish Speech reduce cross-lingual accent
+            # We add [western accent] for English to nudge it away from rigid cadence
             lang_hint = f"[{target_lang.lower()}]"
+            if target_lang.lower() == "english":
+                lang_hint = "[english] [western accent]"
+            
             full_text = f"{lang_hint} {clean_text}" if engine == "fish" else clean_text
 
             clip_path = synthesizer.synthesize(
@@ -238,6 +242,8 @@ def main(
                 clip_name,
                 language=tts_lang,
                 emotion=emotion_tag,
+                temp=kwargs.get("tts_temp", 0.7),
+                top_p=kwargs.get("tts_top_p", 0.8),
             )
         else:
             logger.info(f"Skipping synthesis for segment {i}, using existing: {clip_path}")
@@ -330,6 +336,25 @@ if __name__ == "__main__":
     )
     parser.add_argument("--min_speakers", type=int, help="Minimum number of speakers")
     parser.add_argument("--max_speakers", type=int, help="Maximum number of speakers")
+    parser.add_argument("--tts_temp", type=float, default=0.7, help="TTS Temperature (0.1-1.0)")
+    parser.add_argument("--tts_top_p", type=float, default=0.8, help="TTS Top-P sampling")
+
+    args = parser.parse_args()
+    main(
+        args.video,
+        target_lang=args.lang,
+        hf_token=args.hf_token,
+        device=args.device,
+        ollama_url=args.ollama_url,
+        ollama_model=args.ollama_model,
+        ollama_audio_model=args.ollama_audio_model,
+        engine=args.engine,
+        min_speakers=args.min_speakers,
+        max_speakers=args.max_speakers,
+        tts_temp=args.tts_temp,
+        tts_top_p=args.tts_top_p,
+    )
+", type=int, help="Maximum number of speakers")
 
     args = parser.parse_args()
     main(

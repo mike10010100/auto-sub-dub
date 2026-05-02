@@ -290,15 +290,15 @@ class AudioProcessor:
         """
         from pydub import AudioSegment
 
-        logger.info(f"Applying Vocal Focus filter to {audio_path}...")
+        logger.info(f"Applying Vocal Focus filter (80Hz-12kHz) to {audio_path}...")
         audio = AudioSegment.from_wav(audio_path)
 
-        # Bandpass: Keep 100Hz to 8000Hz (standard human speech range)
-        # We use high_pass and low_pass sequentially for maximum compatibility
-        focused = audio.high_pass_filter(100).low_pass_filter(8000)
+        # Widen Bandpass: 80Hz to 12000Hz to preserve high-frequency vocal character
+        # (Crucial for distinguishing similar voices in anime)
+        focused = audio.high_pass_filter(80).low_pass_filter(12000)
 
-        # Apply noisegate to remove residual isolation artifacts/reverb
-        focused = self.noisegate(focused, threshold_db=-35)
+        # Very relaxed noisegate (-50dB) to avoid clipping word boundaries or breaths
+        focused = self.noisegate(focused, threshold_db=-50)
 
         output_path = Path(str(audio_path).replace(".wav", "_focused.wav"))
         focused.export(output_path, format="wav")

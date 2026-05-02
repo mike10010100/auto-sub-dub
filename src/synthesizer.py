@@ -313,7 +313,16 @@ class FishSynthesizer(BaseSynthesizer):
             logger.info(f"Using Fish Speech binary: {self.s2_cpp_path}")
 
     def synthesize(
-        self, text, speaker_id, speaker_refs, output_filename, language="en", emotion=None
+        self,
+        text,
+        speaker_id,
+        speaker_refs,
+        output_filename,
+        language="en",
+        emotion=None,
+        temp=0.7,
+        top_p=0.8,
+        top_k=20,
     ):
         output_path = self.output_dir / output_filename
         # Pick the best reference for Fish Speech
@@ -326,19 +335,17 @@ class FishSynthesizer(BaseSynthesizer):
 
         cmd = [
             self.s2_cpp_path,
-            "-m",
-            self.model_path,
-            "-t",
-            self.tokenizer_path,
-            "-text",
-            formatted_text,
-            "-pa",
-            ref_wav,
-            "-pt",
-            ref_text,
-            "-o",
-            str(output_path),
+            "-m", self.model_path,
+            "-t", self.tokenizer_path,
+            "-text", formatted_text,
+            "-pa", ref_wav,
+            "-pt", ref_text,
+            "-o", str(output_path),
+            "-temp", str(temp),
+            "-top-p", str(top_p),
+            "-top-k", str(top_k),
         ]
+
 
         if self.device == "cuda":
             cmd.extend(["-c", "0"])
