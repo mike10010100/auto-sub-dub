@@ -335,17 +335,25 @@ class FishSynthesizer(BaseSynthesizer):
 
         cmd = [
             self.s2_cpp_path,
-            "-m", self.model_path,
-            "-t", self.tokenizer_path,
-            "-text", formatted_text,
-            "-pa", ref_wav,
-            "-pt", ref_text,
-            "-o", str(output_path),
-            "-temp", str(temp),
-            "-top-p", str(top_p),
-            "-top-k", str(top_k),
+            "-m",
+            self.model_path,
+            "-t",
+            self.tokenizer_path,
+            "-text",
+            formatted_text,
+            "-pa",
+            ref_wav,
+            "-pt",
+            ref_text,
+            "-o",
+            str(output_path),
+            "-temp",
+            str(temp),
+            "-top-p",
+            str(top_p),
+            "-top-k",
+            str(top_k),
         ]
-
 
         if self.device == "cuda":
             cmd.extend(["-c", "0"])

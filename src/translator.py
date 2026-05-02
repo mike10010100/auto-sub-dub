@@ -236,8 +236,10 @@ class Translator:
             f"HARD LIMIT: no more than {budget} {unit}. Cut filler, interjections, "
             "and redundancy before exceeding this limit.\n"
             "3. Match the delivery implied by the provided emotion tag.\n"
-            "4. Respond with ONLY a JSON object (after any thinking block): "
-            '{"translated_text": "..."}\n' + ctx_rule + sub_rule + extra
+            "4. Identify if the line is part of a SONG (opening/closing theme or background music). "
+            "Songs often have repetitive structures, rhyming, or poetic flow. Set 'is_song': true if so.\n"
+            "5. Respond with ONLY a JSON object (after any thinking block): "
+            '{"translated_text": "...", "is_song": true/false}\n' + ctx_rule + sub_rule + extra
         )
         context_section = f"CONVERSATION CONTEXT:\n{context_block}\n\n" if context_block else ""
         sub_section = (
@@ -264,9 +266,9 @@ class Translator:
             if "{" in content and "}" in content:
                 content = content[content.find("{") : content.rfind("}") + 1]
             data = json.loads(content)
-            return (data.get("translated_text", "") or "").strip()
+            return (data.get("translated_text", "") or "").strip(), bool(data.get("is_song", False))
         except (json.JSONDecodeError, ValueError):
-            return content.strip()
+            return content.strip(), False
 
     def _translate_text(
         self,
@@ -280,7 +282,7 @@ class Translator:
     ):
         """Translate; if the result wouldn't fit in the source window, retry once with a tighter budget."""
         budget = _length_budget(duration, target_lang, headroom=1.0)
-        translated = self._translate_once(
+        translated, is_song = self._translate_once(
             original_text,
             emotion,
             duration,
@@ -290,22 +292,25 @@ class Translator:
             subtitle_hint=subtitle_hint,
         )
         if not translated:
-            return original_text
+            return original_text, is_song
+
+        if is_song:
+            return translated, is_song
 
         est = _estimate_spoken_duration(translated, target_lang)
         if est <= duration * overrun_ratio:
-            return translated
+            return translated, is_song
 
         new_budget = max(1, int(budget * 0.8))
         # If we can't shrink the budget further, retrying is pointless.
         if new_budget >= budget or budget <= 1:
-            return translated
+            return translated, is_song
 
         logger.info(
             f"Retry (overrun): est {est:.2f}s vs target {duration:.2f}s — "
             f"shrinking budget {budget} → {new_budget}"
         )
-        retry = self._translate_once(
+        retry, is_song_retry = self._translate_once(
             original_text,
             emotion,
             duration,
@@ -316,8 +321,8 @@ class Translator:
             subtitle_hint=subtitle_hint,
         )
         if retry and _estimate_spoken_duration(retry, target_lang) < est:
-            return retry
-        return translated
+            return retry, is_song_retry or is_song
+        return translated, is_song
 
     def translate_segments_multimodal(  # pragma: no cover  (orchestrates Ollama + audio)
         self,
@@ -390,7 +395,7 @@ class Translator:
             subtitle_hint = " ".join(h["text"] for h in sub_hits).strip()
 
             try:
-                translated_text = self._translate_text(
+                translated_text, is_song = self._translate_text(
                     original_text,
                     emotion,
                     duration,
@@ -408,6 +413,7 @@ class Translator:
             new_segment["original_text"] = original_text
             new_segment["text"] = translated_text
             new_segment["emotion"] = emotion
+            new_segment["is_song"] = is_song
             out[idx] = new_segment
 
         return out

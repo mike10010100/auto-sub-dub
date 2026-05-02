@@ -108,10 +108,18 @@ def main(
         )
         transcriber.save_transcript(transcript, transcript_path)
 
-        unique_speakers = sorted({s.get("speaker") for s in transcript["segments"] if s.get("speaker")})
-        logger.info(f"Diarization complete. Found {len(unique_speakers)} speakers: {', '.join(unique_speakers)}")
-        if len(unique_speakers) <= 1 and not (kwargs.get("min_speakers") or kwargs.get("max_speakers")):
-            logger.warning("Only one speaker detected. If this is incorrect, try running with --min_speakers.")
+        unique_speakers = sorted(
+            {s.get("speaker") for s in transcript["segments"] if s.get("speaker")}
+        )
+        logger.info(
+            f"Diarization complete. Found {len(unique_speakers)} speakers: {', '.join(unique_speakers)}"
+        )
+        if len(unique_speakers) <= 1 and not (
+            kwargs.get("min_speakers") or kwargs.get("max_speakers")
+        ):
+            logger.warning(
+                "Only one speaker detected. If this is incorrect, try running with --min_speakers."
+            )
 
         # Cleanup focused file to save space
         if vocals_focused.exists() and vocals_focused != vocals:
@@ -120,8 +128,12 @@ def main(
         logger.info(f"Skipping transcription, using existing: {transcript_path}")
         with open(transcript_path, encoding="utf-8") as f:
             transcript = json.load(f)
-        unique_speakers = sorted({s.get("speaker") for s in transcript["segments"] if s.get("speaker")})
-        logger.info(f"Loaded transcript with {len(unique_speakers)} detected speakers.")
+        unique_speakers = sorted(
+            {s.get("speaker") for s in transcript["segments"] if s.get("speaker")}
+        )
+        logger.info(
+            f"Loaded transcript with {len(unique_speakers)} detected speakers: {', '.join(unique_speakers)}"
+        )
 
     # 4. Translate
     translated_transcript_path = project_dir / "transcript_translated.json"
@@ -187,21 +199,53 @@ def main(
     original_audio = AudioSegment.from_wav(orig_audio)
     dubbed_audio_track = AudioSegment.silent(duration=len(original_audio))
 
+    # Pre-load original vocals for song preservation handling
+    original_vocals = AudioSegment.from_wav(vocals)
+
     logger.info(f"Starting synthesis for {len(translated_segments)} segments using {engine} engine...")
+
+
+    # Sort segments by start time to ensure logical processing and overlap detection
+    translated_segments.sort(key=lambda x: x.get("effective_start", x.get("start", 0)))
 
     for i, segment in enumerate(translated_segments):
         speaker = segment.get("speaker")
         text = segment.get("text")
-        
+
+        # Check for overlaps for logging
+        if i < len(translated_segments) - 1:
+            next_seg = translated_segments[i + 1]
+            curr_end = segment.get("effective_end", segment.get("end", 0))
+            next_start = next_seg.get("effective_start", next_seg.get("start", 0))
+            if curr_end > next_start:
+                logger.info(
+                    f"Overlap detected: Segment {i} ({segment.get('speaker')}) ends at {curr_end:.2f}s, Segment {i+1} ({next_seg.get('speaker')}) starts at {next_start:.2f}s"
+                )
+
         # Log progress every 5 segments
         if i % 5 == 0 or i == len(translated_segments) - 1:
-            logger.info(f"Processing segment {i+1}/{len(translated_segments)} (Speaker: {speaker})...")
+            logger.info(
+                f"Processing segment {i+1}/{len(translated_segments)} (Speaker: {speaker})..."
+            )
+
         # Use the widened placement window if present; fall back to the
         # raw diarized boundaries for backward compatibility.
         start_time = segment.get("effective_start", segment.get("start"))
         end_time = segment.get("effective_end", segment.get("end"))
 
         if not text:
+            continue
+
+        # Song handling: Preservation of original singing
+        if segment.get("is_song"):
+            logger.info(f"Segment {i} identified as SONG. Preserving original vocals.")
+            # Extract the original vocals for this time range
+            start_ms = int(segment.get("start") * 1000)
+            end_ms = int(segment.get("end") * 1000)
+            song_clip = original_vocals[start_ms:end_ms]
+            
+            start_ms_dub = int(start_time * 1000)
+            dubbed_audio_track = dubbed_audio_track.overlay(song_clip, position=start_ms_dub)
             continue
 
         if not speaker or speaker not in references:
@@ -232,7 +276,7 @@ def main(
             lang_hint = f"[{target_lang.lower()}]"
             if target_lang.lower() == "english":
                 lang_hint = "[english] [western accent]"
-            
+
             full_text = f"{lang_hint} {clean_text}" if engine == "fish" else clean_text
 
             clip_path = synthesizer.synthesize(
@@ -353,19 +397,4 @@ if __name__ == "__main__":
         max_speakers=args.max_speakers,
         tts_temp=args.tts_temp,
         tts_top_p=args.tts_top_p,
-    )
-", type=int, help="Maximum number of speakers")
-
-    args = parser.parse_args()
-    main(
-        args.video,
-        target_lang=args.lang,
-        hf_token=args.hf_token,
-        device=args.device,
-        ollama_url=args.ollama_url,
-        ollama_model=args.ollama_model,
-        ollama_audio_model=args.ollama_audio_model,
-        engine=args.engine,
-        min_speakers=args.min_speakers,
-        max_speakers=args.max_speakers,
     )

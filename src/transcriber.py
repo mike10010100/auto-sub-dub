@@ -104,7 +104,9 @@ class Transcriber:
         result["segments"] = [s for s in result["segments"] if (s["end"] - s["start"]) >= 0.100]
 
         unique_speakers = sorted({s.get("speaker") for s in result["segments"] if s.get("speaker")})
-        logger.info(f"Diarization found {len(unique_speakers)} unique speakers: {', '.join(unique_speakers)}")
+        logger.info(
+            f"Diarization found {len(unique_speakers)} unique speakers: {', '.join(unique_speakers)}"
+        )
 
         if len(result["segments"]) < original_count:
             logger.info(
