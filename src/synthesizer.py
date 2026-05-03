@@ -20,9 +20,35 @@ class BaseSynthesizer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ref_audio_dir = Path("output/references")
         self.ref_audio_dir.mkdir(parents=True, exist_ok=True)
+        self.rvc_models_dir = Path("models/rvc")
+        self.rvc_models_dir.mkdir(parents=True, exist_ok=True)
         self.device = device or get_device()
         self._vad = None
         self._vad_utils = None
+        self._rvc_infer = None
+
+    def apply_rvc(self, audio_path, speaker_id):
+        """Apply RVC timbre transfer if a model for the speaker exists."""
+        model_path = self.rvc_models_dir / f"{speaker_id}.pth"
+        if not model_path.exists():
+            return audio_path
+
+        logger.info(f"Applying RVC skin for {speaker_id}...")
+        try:
+            from rvc_python.infer import RVCInference
+            if self._rvc_infer is None:
+                self._rvc_infer = RVCInference(device=self.device)
+            
+            output_path = str(audio_path).replace(".wav", "_rvc.wav")
+            self._rvc_infer.load_model(str(model_path))
+            self._rvc_infer.infer_file(str(audio_path), output_path)
+            
+            # Clean up original and return RVC version
+            os.replace(output_path, str(audio_path))
+            return audio_path
+        except Exception as e:
+            logger.error(f"RVC inference failed for {speaker_id}: {e}")
+            return audio_path
 
     def _load_vad(self):
         """Lazy-load Silero VAD. Returns (model, utils) or (None, None) on failure."""

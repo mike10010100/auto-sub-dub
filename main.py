@@ -73,7 +73,7 @@ def main(
     else:
         logger.info(f"Skipping audio extraction, using existing: {orig_audio}")
 
-    # Demucs output paths
+    # Separate vocals (single HQ run for everything)
     vocals = temp_dir / "htdemucs" / "original_audio" / "vocals.wav"
     background = temp_dir / "htdemucs" / "original_audio" / "no_vocals.wav"
 
@@ -81,19 +81,6 @@ def main(
         vocals, background = audio_proc.separate_vocals(orig_audio)
     else:
         logger.info(f"Skipping vocal separation, using existing: {vocals}")
-
-    # Parallel HQ track for XTTS reference cloning (44.1kHz stereo).
-    orig_audio_hq = temp_dir / "original_audio_hq.wav"
-    if not orig_audio_hq.exists():
-        orig_audio_hq = audio_proc.extract_audio_hq(video_path)
-    else:
-        logger.info(f"Skipping HQ audio extraction, using existing: {orig_audio_hq}")
-
-    vocals_hq = temp_dir / "htdemucs" / "original_audio_hq" / "vocals.wav"
-    if not vocals_hq.exists():
-        vocals_hq, _ = audio_proc.separate_vocals(orig_audio_hq)
-    else:
-        logger.info(f"Skipping HQ vocal separation, using existing: {vocals_hq}")
 
     # 3. Transcribe & Diarize
     transcript_path = project_dir / "transcript.json"
@@ -170,9 +157,7 @@ def main(
     # 5. Extract Speaker References
     synthesizer.ref_audio_dir = project_dir / "references"
     synthesizer.ref_audio_dir.mkdir(parents=True, exist_ok=True)
-    references = synthesizer.extract_speaker_references(
-        vocals, transcript, hq_vocals_path=vocals_hq
-    )
+    references = synthesizer.extract_speaker_references(vocals, transcript)
 
     # 6. Synthesize & Place Audio
     lang_map = {
@@ -290,6 +275,10 @@ def main(
                 temp=kwargs.get("tts_temp", 0.7),
                 top_p=kwargs.get("tts_top_p", 0.8),
             )
+            
+            # Apply RVC Skin (Identity Transfer) if a model exists for this speaker
+            if clip_path:
+                clip_path = synthesizer.apply_rvc(clip_path, speaker)
         else:
             logger.info(f"Skipping synthesis for segment {i}, using existing: {clip_path}")
 

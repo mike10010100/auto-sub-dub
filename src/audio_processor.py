@@ -96,30 +96,9 @@ class AudioProcessor:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
     def extract_audio(self, video_path):  # pragma: no cover  (ffmpeg IO)
-        """Extract 16kHz mono audio for WhisperX / diarization."""
-        logger.info(f"Extracting ASR audio from {video_path}...")
-        audio_path = self.temp_dir / "original_audio.wav"
-        try:
-            (
-                ffmpeg.input(video_path)
-                .output(str(audio_path), acodec="pcm_s16le", ac=1, ar="16k")
-                .overwrite_output()
-                .run(quiet=True)
-            )
-            return audio_path
-        except ffmpeg.Error as e:
-            logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else e}")
-            raise
-
-    def extract_audio_hq(self, video_path):  # pragma: no cover  (ffmpeg IO)
-        """
-        Extract 44.1 kHz stereo audio for XTTS reference cloning.
-        XTTS v2 is trained on ~22 kHz+ and degrades noticeably on the 16 kHz
-        mono ASR track — so we keep two parallel tracks: one tuned for ASR,
-        one for voice cloning.
-        """
+        """Extract 44.1kHz stereo audio for the high-quality pipeline."""
         logger.info(f"Extracting HQ audio from {video_path}...")
-        audio_path = self.temp_dir / "original_audio_hq.wav"
+        audio_path = self.temp_dir / "original_audio.wav"
         try:
             (
                 ffmpeg.input(video_path)
@@ -132,11 +111,13 @@ class AudioProcessor:
             logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else e}")
             raise
 
+    def extract_audio_hq(self, video_path):
+        # Deprecated: use extract_audio
+        return self.extract_audio(video_path)
+
     def separate_vocals(self, audio_path):  # pragma: no cover  (demucs subprocess)
         """Separates vocals from background audio using Demucs."""
         logger.info(f"Separating vocals using Demucs for {audio_path}...")
-        # Demucs CLI is often easier to use directly from Python
-        # We use the 'htdemucs' model by default
         try:
             subprocess.run(
                 ["demucs", "--two-stems", "vocals", "-o", str(self.temp_dir), str(audio_path)],
@@ -145,8 +126,7 @@ class AudioProcessor:
                 text=True,
             )
 
-            # Demucs creates a folder structure: output/temp/htdemucs/original_audio/vocals.wav
-            # and output/temp/htdemucs/original_audio/no_vocals.wav
+            # Demucs creates: output/temp/htdemucs/original_audio/vocals.wav
             base_name = Path(audio_path).stem
             model_name = "htdemucs"
 
@@ -157,9 +137,6 @@ class AudioProcessor:
         except subprocess.CalledProcessError as e:
             logger.error(f"Demucs separation failed: {e.stderr if e.stderr else str(e)}")
             raise RuntimeError(f"Demucs failed: {e.stderr if e.stderr else str(e)}") from e
-        except FileNotFoundError as e:
-            logger.error(f"Demucs executable not found. Is it installed and in PATH? {e}")
-            raise RuntimeError("Demucs executable not found. Please install demucs.") from e
 
     def extract_target_subtitles(
         self, video_path, target_lang

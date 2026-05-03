@@ -2,9 +2,11 @@ import io
 import json
 import logging
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import pyphen
 from ollama import Client
 from tqdm import tqdm
 
@@ -55,6 +57,41 @@ def _length_budget(target_duration, language, headroom=1.0):
     if language in CHARS_PER_SECOND:
         return max(1, int(CHARS_PER_SECOND[language] * budget_sec))
     return max(1, int(WORDS_PER_SECOND.get(language, 2.5) * budget_sec))
+
+
+def _count_syllables(text, language):
+    """Estimate syllable count for timing-aware translation."""
+    if not text:
+        return 0
+    # CJK: 1 character approx 1 syllable/mora
+    if language in ["Chinese", "Japanese", "Korean"]:
+        return len(re.sub(r"[^\w]", "", text))
+
+    # English/European: use Pyphen
+    lang_code = {
+        "English": "en_US",
+        "Spanish": "es",
+        "French": "fr",
+        "German": "de",
+        "Italian": "it",
+        "Portuguese": "pt",
+        "Russian": "ru",
+    }.get(language, "en_US")
+
+    try:
+        dic = pyphen.Pyphen(lang=lang_code)
+    except Exception:
+        dic = pyphen.Pyphen(lang="en_US")
+
+    count = 0
+    for word in text.split():
+        word = re.sub(r"[^\w]", "", word)
+        if not word:
+            continue
+        # Pyphen returns hyphenated word, count parts
+        hyphenated = dic.inserted(word)
+        count += len(hyphenated.split("-"))
+    return count
 
 
 class Translator:
@@ -202,6 +239,7 @@ class Translator:
         stricter=False,
         context_block="",
         subtitle_hint="",
+        target_syllables=None,
     ):
         unit = "characters" if target_lang in CHARS_PER_SECOND else "words"
         extra = (
@@ -227,6 +265,15 @@ class Translator:
             if subtitle_hint
             else ""
         )
+        
+        syllable_rule = ""
+        if target_syllables:
+             syllable_rule = (
+                 f"7. CRITICAL TIMING: The source line had {target_syllables} syllables. "
+                 f"Your translation MUST be between {max(1, int(target_syllables*0.8))} and "
+                 f"{int(target_syllables*1.2)} syllables to match the speaker's mouth movements.\n"
+             )
+
         system_prompt = (
             "<|think|>You are a professional video translator and voice director. "
             f"Translate subtitles into {target_lang}.\n\n"
@@ -239,7 +286,7 @@ class Translator:
             "4. Identify if the line is part of a SONG (opening/closing theme or background music). "
             "Songs often have repetitive structures, rhyming, or poetic flow. Set 'is_song': true if so.\n"
             "5. Respond with ONLY a JSON object (after any thinking block): "
-            '{"translated_text": "...", "is_song": true/false}\n' + ctx_rule + sub_rule + extra
+            '{"translated_text": "...", "is_song": true/false}\n' + ctx_rule + sub_rule + syllable_rule + extra
         )
         context_section = f"CONVERSATION CONTEXT:\n{context_block}\n\n" if context_block else ""
         sub_section = (
@@ -279,9 +326,14 @@ class Translator:
         context_block="",
         subtitle_hint="",
         overrun_ratio=1.2,
+        source_lang="Japanese",
     ):
         """Translate; if the result wouldn't fit in the source window, retry once with a tighter budget."""
         budget = _length_budget(duration, target_lang, headroom=1.0)
+        
+        # Calculate source syllables for target-matching
+        source_syllables = _count_syllables(original_text, source_lang)
+        
         translated, is_song = self._translate_once(
             original_text,
             emotion,
@@ -290,6 +342,7 @@ class Translator:
             budget,
             context_block=context_block,
             subtitle_hint=subtitle_hint,
+            target_syllables=source_syllables,
         )
         if not translated:
             return original_text, is_song
@@ -319,6 +372,7 @@ class Translator:
             stricter=True,
             context_block=context_block,
             subtitle_hint=subtitle_hint,
+            target_syllables=source_syllables,
         )
         if retry and _estimate_spoken_duration(retry, target_lang) < est:
             return retry, is_song_retry or is_song
@@ -333,6 +387,7 @@ class Translator:
         context_before=5,
         context_after=3,
         subtitle_entries=None,
+        source_lang="Japanese",
     ):
         """
         Two-pass translation:
@@ -402,6 +457,7 @@ class Translator:
                     target_lang,
                     context_block=context_block,
                     subtitle_hint=subtitle_hint,
+                    source_lang=source_lang,
                 )
             except Exception as e:
                 logger.error(f"Translation failed for segment {idx}: {e}")
