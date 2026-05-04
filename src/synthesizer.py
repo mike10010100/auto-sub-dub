@@ -35,14 +35,22 @@ class BaseSynthesizer:
 
         logger.info(f"Applying RVC skin for {speaker_id}...")
         try:
-            from rvc_python.infer import RVCInference
+            try:
+                from rvc_python.infer import RVCInference
+            except ImportError:
+                logger.error(
+                    f"RVC model found for {speaker_id}, but 'rvc-python' is not installed. "
+                    "Please run 'pip install rvc-python' to enable timbre transfer."
+                )
+                return audio_path
+
             if self._rvc_infer is None:
                 self._rvc_infer = RVCInference(device=self.device)
-            
+
             output_path = str(audio_path).replace(".wav", "_rvc.wav")
             self._rvc_infer.load_model(str(model_path))
             self._rvc_infer.infer_file(str(audio_path), output_path)
-            
+
             # Clean up original and return RVC version
             os.replace(output_path, str(audio_path))
             return audio_path

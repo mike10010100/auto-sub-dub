@@ -275,7 +275,7 @@ def main(
                 temp=kwargs.get("tts_temp", 0.7),
                 top_p=kwargs.get("tts_top_p", 0.8),
             )
-            
+
             # Apply RVC Skin (Identity Transfer) if a model exists for this speaker
             if clip_path:
                 clip_path = synthesizer.apply_rvc(clip_path, speaker)

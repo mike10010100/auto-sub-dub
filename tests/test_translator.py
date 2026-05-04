@@ -5,9 +5,23 @@ from src.translator import (
     VALID_EMOTIONS,
     WORDS_PER_SECOND,
     Translator,
+    _count_syllables,
     _estimate_spoken_duration,
     _length_budget,
 )
+
+
+def test_count_syllables():
+    # English
+    assert _count_syllables("hello", "English") == 2
+    assert _count_syllables("supermarket", "English") == 4
+
+    # Japanese (mora counting)
+    assert _count_syllables("こんにちは", "Japanese") == 5
+    assert _count_syllables("テレビ", "Japanese") == 3
+
+    # Empty
+    assert _count_syllables("", "English") == 0
 
 
 def test_estimate_spoken_duration_english_words():

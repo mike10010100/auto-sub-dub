@@ -152,7 +152,7 @@ class Translator:
                 time.sleep(1.0 * (i + 1))
         raise last_err
 
-    def _tag_emotion(self, audio_bytes, original_text):  # pragma: no cover  (Ollama IO)
+    def _tag_emotion(self, audio_bytes, original_text):  # pragma: no cover
         """Audio-informed emotion tag. Returns one of VALID_EMOTIONS."""
         system_prompt = (
             "You classify the emotional delivery of a short speech clip. "
@@ -265,14 +265,14 @@ class Translator:
             if subtitle_hint
             else ""
         )
-        
+
         syllable_rule = ""
         if target_syllables:
-             syllable_rule = (
-                 f"7. CRITICAL TIMING: The source line had {target_syllables} syllables. "
-                 f"Your translation MUST be between {max(1, int(target_syllables*0.8))} and "
-                 f"{int(target_syllables*1.2)} syllables to match the speaker's mouth movements.\n"
-             )
+            syllable_rule = (
+                f"7. CRITICAL TIMING: The source line had {target_syllables} syllables. "
+                f"Your translation MUST be between {max(1, int(target_syllables*0.8))} and "
+                f"{int(target_syllables*1.2)} syllables to match the speaker's mouth movements.\n"
+            )
 
         system_prompt = (
             "<|think|>You are a professional video translator and voice director. "
@@ -286,7 +286,11 @@ class Translator:
             "4. Identify if the line is part of a SONG (opening/closing theme or background music). "
             "Songs often have repetitive structures, rhyming, or poetic flow. Set 'is_song': true if so.\n"
             "5. Respond with ONLY a JSON object (after any thinking block): "
-            '{"translated_text": "...", "is_song": true/false}\n' + ctx_rule + sub_rule + syllable_rule + extra
+            '{"translated_text": "...", "is_song": true/false}\n'
+            + ctx_rule
+            + sub_rule
+            + syllable_rule
+            + extra
         )
         context_section = f"CONVERSATION CONTEXT:\n{context_block}\n\n" if context_block else ""
         sub_section = (
@@ -330,10 +334,10 @@ class Translator:
     ):
         """Translate; if the result wouldn't fit in the source window, retry once with a tighter budget."""
         budget = _length_budget(duration, target_lang, headroom=1.0)
-        
+
         # Calculate source syllables for target-matching
         source_syllables = _count_syllables(original_text, source_lang)
-        
+
         translated, is_song = self._translate_once(
             original_text,
             emotion,

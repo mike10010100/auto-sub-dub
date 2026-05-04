@@ -16,7 +16,7 @@ python scripts/download_fish_models.py
 
 [tasks.install]
 description = "Install project dependencies"
-run = "pip install -r requirements.txt"
+run = "pip install -r requirements.txt && pip install pyphen"
 
 [tasks.install-dev]
 description = "Install project + dev (ruff, pytest, coverage) dependencies"
