@@ -151,9 +151,16 @@ class BaseSynthesizer:
         if index_path.exists():
             try:
                 cached = json.loads(index_path.read_text(encoding="utf-8"))
-                if all(Path(c["path"]).exists() for clips in cached.values() for c in clips):
+                # Invalidate if files are missing OR if text is empty (s2.cpp requirement)
+                if all(
+                    Path(c["path"]).exists() and c.get("text")
+                    for clips in cached.values()
+                    for c in clips
+                ):
                     logger.info(f"Using cached references from {index_path}")
                     return cached
+                else:
+                    logger.warning("Cached references are invalid or missing text; re-extracting.")
             except Exception as e:
                 logger.warning(f"Could not read ref index {index_path}: {e}")
 
@@ -161,7 +168,10 @@ class BaseSynthesizer:
         unique_speakers = {s["speaker"] for s in segments if s.get("speaker")}
 
         for speaker in unique_speakers:
-            spk_segs = [s for s in segments if s.get("speaker") == speaker]
+            # Filter for segments that have speaker match AND non-empty text
+            spk_segs = [
+                s for s in segments if s.get("speaker") == speaker and s.get("text", "").strip()
+            ]
             candidates = []
             for seg in spk_segs:
                 duration = seg["end"] - seg["start"]
@@ -183,7 +193,7 @@ class BaseSynthesizer:
                 # We must provide the original text as s2.cpp requires prompt text
                 # if prompt audio is provided. We rely on style tags and temperature
                 # to manage cross-lingual accent leakage.
-                candidates.append((score, clip, emotion, seg.get("text", ""), metrics))
+                candidates.append((score, clip, emotion, seg["text"], metrics))
 
             if not candidates and spk_segs:
                 # Even more relaxed fallback for rare side-characters
@@ -197,7 +207,7 @@ class BaseSynthesizer:
                     f"  {speaker}: using low-quality fallback reference (voiced={metrics['voiced_ratio']:.2f})"
                 )
                 score = (metrics["snr_db"], metrics["voiced_ratio"], metrics["dbfs"])
-                candidates.append((score, clip, emotion, longest.get("text", ""), metrics))
+                candidates.append((score, clip, emotion, longest["text"], metrics))
 
             candidates.sort(key=lambda x: x[0], reverse=True)
             picked = candidates[:target_clips]
@@ -380,10 +390,15 @@ class FishSynthesizer(BaseSynthesizer):
         top_k=20,
     ):
         output_path = self.output_dir / output_filename
-        # Pick the best reference for Fish Speech
-        ref_entry = next((r for r in speaker_refs if r["emotion"] == emotion), speaker_refs[0])
+        # Pick the best reference for Fish Speech that HAS text (required by s2.cpp)
+        valid_refs = [r for r in speaker_refs if r.get("text")]
+        if not valid_refs:
+            logger.error(f"No valid references with text found for speaker {speaker_id}")
+            return None
+
+        ref_entry = next((r for r in valid_refs if r["emotion"] == emotion), valid_refs[0])
         ref_wav = ref_entry["path"]
-        ref_text = ref_entry.get("text", "")
+        ref_text = ref_entry["text"]
 
         # Format the text with emotion tags for Fish Speech
         formatted_text = f"{emotion} {text}" if emotion and emotion.startswith("[") else text
