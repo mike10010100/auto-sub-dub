@@ -44,7 +44,12 @@ class Transcriber:
 
         # 1. Transcribe with original whisper
         # Set chunk_size smaller to force more granular segments, helping diarization assignment
-        model = whisperx.load_model("large-v3", self.device, compute_type=self.compute_type, asr_options={"word_timestamps": True})
+        model = whisperx.load_model(
+            "large-v3",
+            self.device,
+            compute_type=self.compute_type,
+            asr_options={"word_timestamps": True},
+        )
         audio = whisperx.load_audio(str(audio_path))
         # Use a more aggressive VAD threshold to split segments on smaller pauses
         result = model.transcribe(audio, batch_size=batch_size, chunk_size=15)

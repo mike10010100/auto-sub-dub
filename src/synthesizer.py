@@ -180,11 +180,10 @@ class BaseSynthesizer:
                 # or just use NEUTRAL for reference extraction.
                 emotion = seg.get("emotion", "[NEUTRAL]") or "[NEUTRAL]"
                 score = (metrics["snr_db"], metrics["voiced_ratio"], metrics["dbfs"])
-                # We intentionally DO NOT store the original source text (e.g. Japanese) 
-                # as the prompt text. If you feed a Japanese prompt text to an English 
-                # synthesis generation, the LLM will heavily leak the Japanese accent 
-                # into the English output. We want pure zero-shot timbre cloning.
-                candidates.append((score, clip, emotion, "", metrics))
+                # We must provide the original text as s2.cpp requires prompt text
+                # if prompt audio is provided. We rely on style tags and temperature
+                # to manage cross-lingual accent leakage.
+                candidates.append((score, clip, emotion, seg.get("text", ""), metrics))
 
             if not candidates and spk_segs:
                 # Even more relaxed fallback for rare side-characters
@@ -198,7 +197,7 @@ class BaseSynthesizer:
                     f"  {speaker}: using low-quality fallback reference (voiced={metrics['voiced_ratio']:.2f})"
                 )
                 score = (metrics["snr_db"], metrics["voiced_ratio"], metrics["dbfs"])
-                candidates.append((score, clip, emotion, "", metrics))
+                candidates.append((score, clip, emotion, longest.get("text", ""), metrics))
 
             candidates.sort(key=lambda x: x[0], reverse=True)
             picked = candidates[:target_clips]
