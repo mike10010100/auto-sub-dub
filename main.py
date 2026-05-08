@@ -162,6 +162,11 @@ def main(
         vocals, transcript, target_clips=5, min_duration=5
     )
 
+    # --- Verification Cycle: Diarization Refinement ---
+    # Use the purified speaker centroids to fix any mislabeled segments
+    # before we start the expensive synthesis phase.
+    translated_segments = synthesizer.refine_speaker_assignments(vocals, translated_segments)
+
     # 6. Synthesize & Place Audio
     lang_map = {
         "English": "en",

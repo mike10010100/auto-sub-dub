@@ -58,6 +58,73 @@ class BaseSynthesizer:
             logger.error(f"RVC inference failed for {speaker_id}: {e}")
             return audio_path
 
+    def _get_embeddings(self, clips):
+        """Calculate speaker embeddings for a list of AudioSegments."""
+        import numpy as np
+        import torch
+        from pyannote.audio import Inference, Model
+
+        logger.info(f"Generating vocal embeddings for {len(clips)} candidate clips...")
+        try:
+            # We use the same token as the diarizer
+            hf_token = os.getenv("HF_TOKEN")
+            model = Model.from_pretrained("pyannote/embedding", use_auth_token=hf_token)
+            inference = Inference(model, window="whole", device=torch.device(self.device))
+
+            embeddings = []
+            for clip in clips:
+                # Convert pydub clip to 16kHz mono float32 tensor for pyannote
+                mono_16k = clip.set_channels(1).set_frame_rate(16000).set_sample_width(2)
+                samples = (
+                    np.frombuffer(mono_16k.raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+                )
+                tensor = torch.from_numpy(samples).unsqueeze(0)
+
+                # Inference expects a dict with 'waveform' and 'sample_rate'
+                emb = inference({"waveform": tensor, "sample_rate": 16000})
+                embeddings.append(emb)
+
+            return np.array(embeddings)
+        except Exception as e:
+            logger.warning(f"Vocal verification unavailable (embedding model failed): {e}")
+            return None
+
+    def _purify_references(self, candidates, speaker_id, threshold=0.35):
+        """Filter out vocal outliers using cosine distance to the group centroid."""
+        if len(candidates) < 2:
+            return candidates
+
+        import numpy as np
+        from scipy.spatial.distance import cdist
+
+        clips = [c[1] for c in candidates]
+        embs = self._get_embeddings(clips)
+        if embs is None:
+            return candidates
+
+        # 1. Calculate the 'Vocal Anchor' (the clip closest to all others)
+        dist_matrix = cdist(embs, embs, metric="cosine")
+        avg_distances = np.mean(dist_matrix, axis=1)
+        anchor_idx = np.argmin(avg_distances)
+
+        # 2. Reject outliers that are too far from the anchor
+        purified = []
+        rejected_count = 0
+        for i, cand in enumerate(candidates):
+            dist = dist_matrix[anchor_idx, i]
+            if dist <= threshold:
+                purified.append(cand)
+            else:
+                rejected_count += 1
+
+        if rejected_count > 0:
+            logger.warning(
+                f"  {speaker_id}: Rejected {rejected_count} vocal outliers "
+                f"from candidate pool (Consensus check)."
+            )
+
+        return purified
+
     def _load_vad(self):
         """Lazy-load Silero VAD. Returns (model, utils) or (None, None) on failure."""
         if self._vad is not None:
@@ -126,12 +193,12 @@ class BaseSynthesizer:
         self,
         vocals_path,
         transcript,
-        target_clips=3,
-        min_duration=3,
+        target_clips=5,
+        min_duration=5,
         max_duration=20,
         trim_to=12.0,
         hq_vocals_path=None,
-        min_voiced_ratio=0.55,
+        min_voiced_ratio=0.40,
     ):
         """
         Extract per-speaker reference clips for voice cloning.
@@ -209,22 +276,107 @@ class BaseSynthesizer:
                 score = (metrics["snr_db"], metrics["voiced_ratio"], metrics["dbfs"])
                 candidates.append((score, clip, emotion, longest["text"], metrics))
 
-            candidates.sort(key=lambda x: x[0], reverse=True)
-            picked = candidates[:target_clips]
+            # --- Vocal Consistency Check (Outlier Rejection) ---
+            # Purify the pool to ensure all clips sound like the same character
+            purified_pool = self._purify_references(candidates, speaker)
+            purified_pool.sort(key=lambda x: x[0], reverse=True)
+            picked = purified_pool[:target_clips]
+
+            # Organize into subfolders for the 'Reference Gallery'
+            spk_dir = self.ref_audio_dir / speaker
+            spk_dir.mkdir(parents=True, exist_ok=True)
 
             entries = []
             for i, (score, clip, emotion, text, metrics) in enumerate(picked):
                 safe_emotion = emotion.strip("[]") or "NEUTRAL"
-                ref_path = self.ref_audio_dir / f"{speaker}_ref_{i}_{safe_emotion}.wav"
+                ref_path = spk_dir / f"ref_{i+1}_{safe_emotion}.wav"
                 clip.export(ref_path, format="wav")
                 entries.append({"path": str(ref_path), "emotion": emotion, "text": text})
 
             if entries:
                 references[speaker] = entries
-                logger.info(f"  {speaker}: extracted {len(entries)} reference clips.")
+                logger.info(f"  {speaker}: finalized {len(entries)} consistent reference clips.")
 
         index_path.write_text(json.dumps(references, indent=2), encoding="utf-8")
         return references
+
+    def refine_speaker_assignments(self, audio_path, segments):
+        """
+        Second-pass diarization: use refined speaker centroids to re-verify labels
+        for every segment, fixing misattributions.
+        """
+        logger.info("Starting Diarization Refinement (Second Pass)...")
+
+        # 1. Get purified centroids for every known speaker
+        index_path = self.ref_audio_dir / "references.json"
+        if not index_path.exists():
+            return segments
+
+        try:
+            refs = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:
+            return segments
+
+        import numpy as np
+
+        centroids = {}
+        for spk, clips in refs.items():
+            # Load embeddings for the finalized reference clips
+            clip_segments = [AudioSegment.from_wav(c["path"]) for c in clips]
+            embs = self._get_embeddings(clip_segments)
+            if embs is not None:
+                centroids[spk] = np.mean(embs, axis=0)
+
+        if not centroids:
+            return segments
+
+        # 2. Re-verify every segment
+        audio = AudioSegment.from_wav(audio_path)
+        refined_count = 0
+
+        from scipy.spatial.distance import cosine
+
+        for seg in segments:
+            start_ms = int(seg["start"] * 1000)
+            end_ms = int(seg["end"] * 1000)
+            if (end_ms - start_ms) < 500:  # Skip micro-segments for refinement
+                continue
+
+            clip = audio[start_ms:end_ms]
+            # Get embedding for this specific line
+            seg_emb_arr = self._get_embeddings([clip])
+            if seg_emb_arr is None:
+                continue
+            seg_emb = seg_emb_arr[0]
+
+            # Find the closest centroid
+            curr_spk = seg.get("speaker")
+            best_spk = curr_spk
+            min_dist = float("inf")
+
+            distances = {}
+            for spk, centroid in centroids.items():
+                dist = cosine(seg_emb, centroid)
+                distances[spk] = dist
+                if dist < min_dist:
+                    min_dist = dist
+                    best_spk = spk
+
+            # 3. Only flip if we are MUCH more certain about another speaker
+            # (threshold: 0.15 gap or original was very far > 0.45)
+            curr_dist = distances.get(curr_spk, 1.0)
+            if best_spk != curr_spk and ((curr_dist - min_dist) > 0.15 or curr_dist > 0.45):
+                logger.info(
+                    f"  Re-assigned segment {seg.get('start', 0):.1f}s: "
+                    f"{curr_spk} ({curr_dist:.2f}) -> {best_spk} ({min_dist:.2f})"
+                )
+                seg["speaker"] = best_spk
+                refined_count += 1
+
+        if refined_count > 0:
+            logger.info(f"Diarization Refinement complete. Fixed {refined_count} labels.")
+
+        return segments
 
     def adjust_speed(self, audio_path, target_duration):
         """Adjusts the speed of an audio file to match the target duration without changing pitch."""
