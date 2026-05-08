@@ -157,7 +157,10 @@ def main(
     # 5. Extract Speaker References
     synthesizer.ref_audio_dir = project_dir / "references"
     synthesizer.ref_audio_dir.mkdir(parents=True, exist_ok=True)
-    references = synthesizer.extract_speaker_references(vocals, transcript)
+    # Increase to 5 clips and 5s min duration for a more robust vocal profile
+    references = synthesizer.extract_speaker_references(
+        vocals, transcript, target_clips=5, min_duration=5
+    )
 
     # 6. Synthesize & Place Audio
     lang_map = {
@@ -319,6 +322,10 @@ def main(
         audio_codec = "libopus"
 
     try:
+        # Determine source language ISO
+        src_iso = audio_proc.LANG_TO_ISO3.get(transcript.get("language", "Japanese"), "und")
+        tgt_iso = audio_proc.LANG_TO_ISO3.get(target_lang, "eng")
+
         subprocess.run(
             [
                 "ffmpeg",
@@ -328,13 +335,29 @@ def main(
                 "-i",
                 str(final_audio_path),
                 "-map",
-                "0:v",
+                "0:v",  # Map original video
                 "-map",
-                "1:a",
+                "0:a",  # Map original audio (Track 1)
+                "-map",
+                "1:a",  # Map dubbed audio (Track 2)
                 "-c:v",
                 "copy",
-                "-c:a",
-                audio_codec,
+                "-c:a:0",
+                "copy",  # Keep original audio as-is
+                "-c:a:1",
+                audio_codec,  # Encode dubbed audio
+                "-metadata:s:a:0",
+                f"language={src_iso}",
+                "-metadata:s:a:0",
+                "title=Original",
+                "-metadata:s:a:1",
+                f"language={tgt_iso}",
+                "-metadata:s:a:1",
+                "title=Dubbed",
+                "-disposition:a:0",
+                "0",  # Original is NOT default
+                "-disposition:a:1",
+                "default",  # Dub is default
                 "-shortest",
                 str(video_output_path),
             ],
