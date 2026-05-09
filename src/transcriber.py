@@ -1,20 +1,7 @@
 import json
 import logging
-import warnings
 
-# Silence standard warnings from heavy libraries
-warnings.filterwarnings(
-    "ignore", message="Passing `gradient_checkpointing` to a config initialization"
-)
-warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
-warnings.filterwarnings("ignore", message=r"std\(\): degrees of freedom is <= 0")
-warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
-warnings.filterwarnings(
-    "ignore", message="Model has been trained with a task-dependent loss function"
-)
-warnings.filterwarnings("ignore", message="You have multiple `ModelCheckpoint` callback states")
-
-import whisperx  # noqa: E402
+import whisperx
 
 from src.utils import get_compute_type, get_device  # noqa: E402
 

@@ -3,7 +3,6 @@ import logging
 import os
 import subprocess
 import tempfile
-import warnings
 from pathlib import Path
 
 from audiotsm import wsola
@@ -13,12 +12,6 @@ from pydub import AudioSegment
 from src.utils import get_device
 
 # Silence verbose library noise
-warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
-warnings.filterwarnings(
-    "ignore", message="Model has been trained with a task-dependent loss function"
-)
-warnings.filterwarnings("ignore", message="You have multiple `ModelCheckpoint` callback states")
-
 logger = logging.getLogger(__name__)
 
 
