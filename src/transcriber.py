@@ -8,6 +8,11 @@ warnings.filterwarnings(
 )
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 warnings.filterwarnings("ignore", message=r"std\(\): degrees of freedom is <= 0")
+warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
+warnings.filterwarnings(
+    "ignore", message="Model has been trained with a task-dependent loss function"
+)
+warnings.filterwarnings("ignore", message="You have multiple `ModelCheckpoint` callback states")
 
 import whisperx  # noqa: E402
 

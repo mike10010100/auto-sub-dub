@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 
 from audiotsm import wsola
@@ -10,6 +11,13 @@ from audiotsm.io.wav import WavReader, WavWriter
 from pydub import AudioSegment
 
 from src.utils import get_device
+
+# Silence verbose library noise
+warnings.filterwarnings("ignore", message="You are using `torch.load` with `weights_only=False`")
+warnings.filterwarnings(
+    "ignore", message="Model has been trained with a task-dependent loss function"
+)
+warnings.filterwarnings("ignore", message="You have multiple `ModelCheckpoint` callback states")
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +34,8 @@ class BaseSynthesizer:
         self._vad = None
         self._vad_utils = None
         self._rvc_infer = None
+        self._embedding_model = None
+        self._embedding_inference = None
 
     def apply_rvc(self, audio_path, speaker_id):
         """Apply RVC timbre transfer if a model for the speaker exists."""
@@ -64,44 +74,47 @@ class BaseSynthesizer:
         import torch
         from pyannote.audio import Inference, Model
 
-        logger.info(f"Generating vocal embeddings for {len(clips)} candidate clips...")
-        try:
-            # We use the same token as the diarizer
-            hf_token = os.getenv("HF_TOKEN")
-            if not hf_token:
-                logger.warning(
-                    "HF_TOKEN not found in environment. Vocal verification will be skipped."
+        if self._embedding_model is None:
+            logger.info("Loading PyAnnote embedding model...")
+            try:
+                # We use the same token as the diarizer
+                hf_token = os.getenv("HF_TOKEN")
+                if not hf_token:
+                    logger.warning(
+                        "HF_TOKEN not found in environment. Vocal verification will be skipped."
+                    )
+                    return None
+
+                # Explicitly load the model and check for errors
+                self._embedding_model = Model.from_pretrained(
+                    "pyannote/embedding", use_auth_token=hf_token
                 )
+                if self._embedding_model is None:
+                    logger.error(
+                        "Failed to load 'pyannote/embedding'. Have you accepted the terms at "
+                        "https://huggingface.co/pyannote/embedding ?"
+                    )
+                    return None
+
+                self._embedding_inference = Inference(
+                    self._embedding_model, window="whole", device=torch.device(self.device)
+                )
+            except Exception as e:
+                logger.warning(f"Vocal verification unavailable (embedding model failed): {e}")
                 return None
 
-            # Explicitly load the model and check for errors
-            model = Model.from_pretrained("pyannote/embedding", use_auth_token=hf_token)
-            if model is None:
-                logger.error(
-                    "Failed to load 'pyannote/embedding'. Have you accepted the terms at "
-                    "https://huggingface.co/pyannote/embedding ?"
-                )
-                return None
+        embeddings = []
+        for clip in clips:
+            # Convert pydub clip to 16kHz mono float32 tensor for pyannote
+            mono_16k = clip.set_channels(1).set_frame_rate(16000).set_sample_width(2)
+            samples = np.frombuffer(mono_16k.raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+            tensor = torch.from_numpy(samples).unsqueeze(0)
 
-            inference = Inference(model, window="whole", device=torch.device(self.device))
+            # Inference expects a dict with 'waveform' and 'sample_rate'
+            emb = self._embedding_inference({"waveform": tensor, "sample_rate": 16000})
+            embeddings.append(emb)
 
-            embeddings = []
-            for clip in clips:
-                # Convert pydub clip to 16kHz mono float32 tensor for pyannote
-                mono_16k = clip.set_channels(1).set_frame_rate(16000).set_sample_width(2)
-                samples = (
-                    np.frombuffer(mono_16k.raw_data, dtype=np.int16).astype(np.float32) / 32768.0
-                )
-                tensor = torch.from_numpy(samples).unsqueeze(0)
-
-                # Inference expects a dict with 'waveform' and 'sample_rate'
-                emb = inference({"waveform": tensor, "sample_rate": 16000})
-                embeddings.append(emb)
-
-            return np.array(embeddings)
-        except Exception as e:
-            logger.warning(f"Vocal verification unavailable (embedding model failed): {e}")
-            return None
+        return np.array(embeddings)
 
     def _purify_references(self, candidates, speaker_id, threshold=0.35):
         """Filter out vocal outliers using cosine distance to the group centroid."""
