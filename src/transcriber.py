@@ -48,16 +48,20 @@ class Transcriber:
         logger.info(f"Transcribing {audio_path}...")
 
         # 1. Transcribe with original whisper
-        # Set chunk_size smaller to force more granular segments, helping diarization assignment
+        # Use a smaller chunk size and enable native word timestamps for better overlap handling
         model = whisperx.load_model(
             "large-v3",
             self.device,
             compute_type=self.compute_type,
-            asr_options={"word_timestamps": True},
+            asr_options={
+                "word_timestamps": True,
+                "hotwords": None,
+                "multilingual": True,
+            },
         )
         audio = whisperx.load_audio(str(audio_path))
-        # Use a more aggressive VAD threshold to split segments on smaller pauses
-        result = model.transcribe(audio, batch_size=batch_size, chunk_size=15)
+        # chunk_size=10 is aggressive but essential for fast-paced overlapping dialogue
+        result = model.transcribe(audio, batch_size=batch_size, chunk_size=10)
 
         # 2. Align whisper output
         logger.info("Aligning transcription...")
@@ -65,7 +69,12 @@ class Transcriber:
             language_code=result["language"], device=self.device
         )
         result = whisperx.align(
-            result["segments"], model_a, metadata, audio, self.device, return_char_alignments=False
+            result["segments"],
+            model_a,
+            metadata,
+            audio,
+            self.device,
+            return_char_alignments=False,
         )
 
         # 3. Assign speaker labels
