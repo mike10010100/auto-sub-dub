@@ -5,7 +5,7 @@ Build a fully local, open-source pipeline that takes a video file, isolates voca
 
 ## Key Files & Context
 - **Repository:** `/home/mike10010100/git/auto-sub-dub`
-- **LLM Endpoint:** `http://192.168.86.172:11434` (Ollama running Gemma 4 26B)
+- **LLM Endpoint:** `http://192.168.86.157:11434` (Ollama running Gemma 4 26B)
 - **Hardware Profile:** NVIDIA RTX 3080 (10GB VRAM) for local processing, RTX 3500 Ada for Ollama.
 
 ## Architecture & Technology Stack

@@ -76,7 +76,7 @@ python src/synthesizer.py
 
 [env]
 PYTHONPATH = "."
-OLLAMA_URL = "http://192.168.86.172:11434"
+OLLAMA_URL = "http://192.168.86.157:11434"
 OLLAMA_MODEL = "gemma4:26b"
 OLLAMA_AUDIO_MODEL = "gemma4:e4b"
 COQUI_TOS_AGREED = "1"
