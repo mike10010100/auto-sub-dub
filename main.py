@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Silence SpeechBrain noise
 logging.getLogger("speechbrain").setLevel(logging.ERROR)
 
-from src.audio_processor import AudioProcessor, parse_srt
+from src.audio_processor import LANG_TO_ISO3, AudioProcessor, parse_srt
 from src.synthesizer import Synthesizer
 from src.timing import annotate_effective_windows  # noqa: E402,F401
 from src.transcriber import Transcriber
@@ -328,8 +328,8 @@ def main(
 
     try:
         # Determine source language ISO
-        src_iso = audio_proc.LANG_TO_ISO3.get(transcript.get("language", "Japanese"), "und")
-        tgt_iso = audio_proc.LANG_TO_ISO3.get(target_lang, "eng")
+        src_iso = LANG_TO_ISO3.get(transcript.get("language", "Japanese"), "und")
+        tgt_iso = LANG_TO_ISO3.get(target_lang, "eng")
 
         subprocess.run(
             [

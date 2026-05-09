@@ -68,7 +68,21 @@ class BaseSynthesizer:
         try:
             # We use the same token as the diarizer
             hf_token = os.getenv("HF_TOKEN")
+            if not hf_token:
+                logger.warning(
+                    "HF_TOKEN not found in environment. Vocal verification will be skipped."
+                )
+                return None
+
+            # Explicitly load the model and check for errors
             model = Model.from_pretrained("pyannote/embedding", use_auth_token=hf_token)
+            if model is None:
+                logger.error(
+                    "Failed to load 'pyannote/embedding'. Have you accepted the terms at "
+                    "https://huggingface.co/pyannote/embedding ?"
+                )
+                return None
+
             inference = Inference(model, window="whole", device=torch.device(self.device))
 
             embeddings = []
