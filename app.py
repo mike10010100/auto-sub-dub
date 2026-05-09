@@ -76,7 +76,7 @@ with st.sidebar:
 
     ollama_url = st.text_input(
         "Ollama URL",
-        value=os.getenv("OLLAMA_URL", "http://192.168.86.157:11434"),
+        value=os.getenv("OLLAMA_URL", "http://192.168.86.172:11434"),
         help="The address of your local or remote Ollama instance",
     )
     ollama_model = st.text_input(
