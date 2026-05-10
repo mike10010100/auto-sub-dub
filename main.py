@@ -345,12 +345,16 @@ def main(
                 "0:a",  # Map original audio (Track 1)
                 "-map",
                 "1:a",  # Map dubbed audio (Track 2)
+                "-map",
+                "0:s?",  # Map all original subtitles (optional match)
                 "-c:v",
                 "copy",
                 "-c:a:0",
                 "copy",  # Keep original audio as-is
                 "-c:a:1",
                 audio_codec,  # Encode dubbed audio
+                "-c:s",
+                "copy",  # Copy subtitles as-is
                 "-metadata:s:a:0",
                 f"language={src_iso}",
                 "-metadata:s:a:0",
