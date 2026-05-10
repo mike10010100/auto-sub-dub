@@ -382,6 +382,83 @@ class Translator:
             return retry, is_song_retry or is_song
         return translated, is_song
 
+    def review_diarization(self, segments):  # pragma: no cover
+        """
+        Use the LLM to review conversational flow and logically correct
+        speaker diarization mistakes (e.g., merging overlapping characters).
+        """
+        if not segments:
+            return segments
+
+        logger.info(f"Starting Semantic Diarization Review for {len(segments)} segments...")
+
+        chunk_size = 25
+        out_segments = [s.copy() for s in segments]
+
+        for i in tqdm(range(0, len(out_segments), chunk_size), desc="Semantic Review"):
+            chunk = out_segments[i : i + chunk_size]
+
+            # Format the chunk
+            lines = []
+            for j, seg in enumerate(chunk):
+                src = (seg.get("text") or "").strip()
+                speaker = seg.get("speaker") or "?"
+                lines.append(f"[{i+j}] ({speaker}): {src}")
+
+            context_block = "\n".join(lines)
+
+            system_prompt = (
+                "<|think|>You are a logic analyzer. Review the following dialogue transcript. "
+                "The acoustic diarization AI often misidentifies speakers when their voices are similar or overlapping. "
+                "Look for logical breaks in conversational flow (e.g., a person answering their own question, "
+                "or a sudden shift in tone/topic attributed to the same speaker). "
+                "If you find an error, correct the speaker label to match the logical flow of the conversation. "
+                "Return ONLY a JSON object containing an array of corrections (after your thinking block). "
+                'Format: {"corrections": [{"index": 12, "new_speaker": "SPEAKER_02"}]}\n'
+                'If no corrections are needed, return an empty array: {"corrections": []}.'
+            )
+
+            try:
+                resp = self._chat_with_retry(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"TRANSCRIPT CHUNK:\n{context_block}"},
+                    ],
+                    options={"temperature": 0.2, "top_p": 0.95},
+                )
+
+                content = resp["message"]["content"].strip()
+                if "<channel|>" in content:
+                    content = content.split("<channel|>")[-1].strip()
+                if "{" in content and "}" in content:
+                    content = content[content.find("{") : content.rfind("}") + 1]
+
+                data = json.loads(content)
+                corrections = data.get("corrections", [])
+
+                for corr in corrections:
+                    idx = corr.get("index")
+                    new_spk = corr.get("new_speaker")
+                    if (
+                        idx is not None
+                        and new_spk
+                        and isinstance(idx, int)
+                        and i <= idx < i + chunk_size
+                    ):
+                        old_spk = out_segments[idx].get("speaker")
+                        if old_spk != new_spk:
+                            logger.info(
+                                f"  Semantic Review Fixed: Segment {idx} ({old_spk} -> {new_spk})"
+                            )
+                            out_segments[idx]["speaker"] = new_spk
+
+            except Exception as e:
+                logger.warning(f"Semantic Diarization Review failed for chunk {i}: {e}")
+                continue
+
+        return out_segments
+
     def translate_segments_multimodal(  # pragma: no cover  (orchestrates Ollama + audio)
         self,
         segments,

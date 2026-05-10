@@ -93,6 +93,10 @@ def main(
             min_speakers=kwargs.get("min_speakers"),
             max_speakers=kwargs.get("max_speakers"),
         )
+
+        # Semantic Diarization Review (LLM Logic Pass)
+        transcript["segments"] = translator.review_diarization(transcript["segments"])
+
         transcriber.save_transcript(transcript, transcript_path)
 
         unique_speakers = sorted(
