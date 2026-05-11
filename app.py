@@ -12,9 +12,13 @@ import logging
 import main as pipeline
 from src.utils import get_device
 
-# Silence SpeechBrain noise
+# Silence noisy library warnings
 logging.getLogger("speechbrain").setLevel(logging.ERROR)
 logging.getLogger("speechbrain.utils.importutils").setLevel(logging.ERROR)
+logging.getLogger("speechbrain.integrations").setLevel(logging.ERROR)
+logging.getLogger("streamlit.watcher.local_sources_watcher").setLevel(logging.ERROR)
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="streamlit.watcher.local_sources_watcher")
 
 st.set_page_config(page_title="Auto-Dub AI", layout="wide")
 

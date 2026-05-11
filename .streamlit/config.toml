@@ -1,0 +1,7 @@
+[server]
+# Disable the watcher that causes recursive import errors with SpeechBrain
+fileWatcherType = "none"
+
+[browser]
+# Reduce startup noise
+gatherUsageStats = false
