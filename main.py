@@ -284,10 +284,10 @@ def main(
 
         if not clip_path.exists():
             # Add a language hint to help Fish Speech reduce cross-lingual accent
-            # We add [western accent] for English to nudge it away from rigid cadence
+            # We add [American accent] for English target to nudge it away from rigid cadence
             lang_hint = f"[{target_lang.lower()}]"
             if target_lang.lower() == "english":
-                lang_hint = "[english] [western accent]"
+                lang_hint = "[english] [American accent]"
 
             full_text = f"{lang_hint} {clean_text}" if engine == "fish" else clean_text
 
