@@ -110,11 +110,12 @@ class Translator:
         self.ollama_url = ollama_url or os.getenv("OLLAMA_URL", "http://localhost:11434")
         self.model = model or os.getenv("OLLAMA_MODEL", "gemma4:26b")
         self.audio_model = audio_model or os.getenv("OLLAMA_AUDIO_MODEL", "gemma4:e4b")
+        self.num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
 
         self.client = Client(host=self.ollama_url)
         logger.info(
             f"Translator: ollama={self.ollama_url} "
-            f"translate={self.model} audio={self.audio_model}"
+            f"translate={self.model} audio={self.audio_model} ctx={self.num_ctx}"
         )
 
     # Gemma 4 e4b's audio encoder crashes the runner on clips shorter than
@@ -308,7 +309,7 @@ class Translator:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
             ],
-            options={"temperature": 1.0, "top_p": 0.95, "top_k": 64},
+            options={"temperature": 1.0, "top_p": 0.95, "top_k": 64, "num_ctx": self.num_ctx},
         )
         content = resp["message"]["content"].strip()
         if "<channel|>" in content:
@@ -425,7 +426,7 @@ class Translator:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": f"TRANSCRIPT CHUNK:\n{context_block}"},
                     ],
-                    options={"temperature": 0.2, "top_p": 0.95},
+                    options={"temperature": 0.2, "top_p": 0.95, "num_ctx": self.num_ctx},
                 )
 
                 content = resp["message"]["content"].strip()
