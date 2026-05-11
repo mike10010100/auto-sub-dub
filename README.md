@@ -49,6 +49,28 @@ mise run web
 ```
 This allows for easy video uploads, device selection (CUDA/MPS/CPU), and progress monitoring.
 
+### Docker Deployment (One-Step)
+If you are deploying to a server with NVIDIA GPUs (like Lambda Labs), you can set up the entire stack with one command:
+
+1. **Clone the repo:**
+   ```bash
+   git clone https://github.com/mike10010100/auto-sub-dub.git
+   cd auto-sub-dub
+   ```
+2. **Launch the stack:**
+   ```bash
+   # Set your HF token first
+   export HF_TOKEN=your_token_here
+   docker-compose up --build
+   ```
+
+This will automatically:
+* Start an Ollama server and pull the `gemma4:26b` and `gemma4:e4b` models.
+* Build the application container with CUDA support.
+* Compile the `s2.cpp` high-fidelity audio engine.
+* Download the Fish Speech GGUF models.
+* Launch the Streamlit web interface on port `8501`.
+
 ### Command Line
 Run the pipeline using `mise`:
 ```bash

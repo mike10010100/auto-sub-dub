@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # The Ollama Server
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-server
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: always
+
+  # Helper service to pull models into Ollama on startup
+  ollama-pull-models:
+    image: curlimages/curl:latest
+    container_name: ollama-setup
+    depends_on:
+      - ollama
+    entrypoint: [ "/bin/sh", "-c" ]
+    command:
+      - |
+        echo "Waiting for Ollama to start..."
+        while ! curl -s http://ollama:11434/api/tags > /dev/null; do sleep 5; done
+        echo "Pulling Gemma 4 models..."
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "gemma4:26b"}'
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "gemma4:e4b"}'
+        echo "Models ready!"
+
+  # The Auto-Dub application
+  auto-dub:
+    build: .
+    container_name: auto-dub-app
+    ports:
+      - "8501:8501"
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_MODEL=gemma4:26b
+      - OLLAMA_AUDIO_MODEL=gemma4:e4b
+      - HF_TOKEN=${HF_TOKEN}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      - ollama
+    volumes:
+      - ./output:/app/output
+      - ./models:/app/models
+    restart: on-failure
+
+volumes:
+  ollama_data:
