@@ -18,7 +18,10 @@ logging.getLogger("speechbrain.utils.importutils").setLevel(logging.ERROR)
 logging.getLogger("speechbrain.integrations").setLevel(logging.ERROR)
 logging.getLogger("streamlit.watcher.local_sources_watcher").setLevel(logging.ERROR)
 import warnings
-warnings.filterwarnings("ignore", category=UserWarning, module="streamlit.watcher.local_sources_watcher")
+
+warnings.filterwarnings(
+    "ignore", category=UserWarning, module="streamlit.watcher.local_sources_watcher"
+)
 
 st.set_page_config(page_title="Auto-Dub AI", layout="wide")
 
@@ -161,7 +164,10 @@ if uploaded_file is not None:
 
         try:
             with st.status("Dubbing in progress...", expanded=True) as status:
-                st.write(f"Step 1: Initializing components on {device}...")
+
+                def progress_cb(msg):
+                    status.write(msg)
+
                 pipeline.main(
                     str(video_path),
                     target_lang=target_lang,
@@ -175,6 +181,7 @@ if uploaded_file is not None:
                     max_speakers=int(max_speakers),
                     tts_temp=float(tts_temp),
                     tts_top_p=float(tts_top_p),
+                    progress_callback=progress_cb,
                 )
 
                 status.update(label="Dubbing complete!", state="complete", expanded=False)

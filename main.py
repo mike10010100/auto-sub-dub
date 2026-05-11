@@ -39,9 +39,16 @@ def main(
     ollama_model=None,
     ollama_audio_model=None,
     engine="xtts",
+    progress_callback=None,
     **kwargs,
 ):  # pragma: no cover
+    def update_progress(msg):
+        logger.info(msg)
+        if progress_callback:
+            progress_callback(msg)
+
     # 1. Initialize components
+    update_progress(f"Step 1: Initializing components on {device or get_device()}...")
     video_name = Path(video_path).stem
     project_dir = Path("output") / video_name
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -67,6 +74,7 @@ def main(
     synthesizer = Synthesizer(engine=engine, output_dir=audio_segments_dir, device=device)
 
     # 2. Process Audio
+    update_progress("Step 2: Isolating vocals and background audio (Demucs)...")
     orig_audio = temp_dir / "original_audio.wav"
     if not orig_audio.exists():
         orig_audio = audio_proc.extract_audio(video_path)
@@ -85,6 +93,7 @@ def main(
     # 3. Transcribe & Diarize
     transcript_path = project_dir / "transcript.json"
     if not transcript_path.exists():
+        update_progress("Step 3: Transcribing and identifying speakers (WhisperX)...")
         # Apply Vocal Focus filter to clean up isolated audio for better diarization
         vocals_focused = audio_proc.focus_vocals(vocals)
 
@@ -94,6 +103,7 @@ def main(
             max_speakers=kwargs.get("max_speakers"),
         )
 
+        update_progress("Step 3b: Reviewing diarization for logical consistency (Gemma 4)...")
         # Semantic Diarization Review (LLM Logic Pass)
         transcript["segments"] = translator.review_diarization(transcript["segments"])
 
@@ -144,6 +154,7 @@ def main(
                 f"Loaded {len(subtitle_entries)} {target_lang} subtitle entries as reconciliation hints."
             )
 
+        update_progress(f"Step 4: Translating dialogue to {target_lang} (Gemma 4)...")
         translated_segments = translator.translate_segments_multimodal(
             transcript["segments"],
             vocals_path=vocals,
@@ -159,6 +170,7 @@ def main(
         translated_segments = transcript["translated_segments"]
 
     # 5. Extract Speaker References
+    update_progress("Step 5: Extracting high-quality voice samples for cloning...")
     synthesizer.ref_audio_dir = project_dir / "references"
     synthesizer.ref_audio_dir.mkdir(parents=True, exist_ok=True)
     # Increase to 5 clips and 5s min duration for a more robust vocal profile
@@ -167,11 +179,13 @@ def main(
     )
 
     # --- Verification Cycle: Diarization Refinement ---
+    update_progress("Step 5b: Re-verifying speaker assignments (Acoustic Verification)...")
     # Use the purified speaker centroids to fix any mislabeled segments
     # before we start the expensive synthesis phase.
     translated_segments = synthesizer.refine_speaker_assignments(vocals, translated_segments)
 
     # 6. Synthesize & Place Audio
+    update_progress(f"Step 6: Synthesizing dubbed audio segments ({engine})...")
     lang_map = {
         "English": "en",
         "Spanish": "es",
@@ -315,7 +329,7 @@ def main(
     # Force .mp4 output for maximum compatibility across players
     video_output_path = project_dir / f"dubbed_{Path(video_path).stem}.mp4"
 
-    logger.info("Mixing final audio track...")
+    update_progress("Step 7: Mixing final track and remuxing video (FFmpeg)...")
     background_audio = AudioSegment.from_wav(background)
     dubbed_audio_track = audio_proc.match_loudness(dubbed_audio_track, vocals)
     final_mixed_audio = audio_proc.duck_audio(dubbed_audio_track, background_audio)
