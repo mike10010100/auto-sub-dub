@@ -339,10 +339,14 @@ def main(
 
     logger.info(f"Remuxing final video to {video_output_path}...")
 
-    # Choose audio codec based on extension
+    # Choose audio and subtitle codecs based on extension
     audio_codec = "aac"
+    subtitle_codec = "copy"
     if video_output_path.suffix.lower() == ".webm":
         audio_codec = "libopus"
+    elif video_output_path.suffix.lower() == ".mp4":
+        # MP4 does not support ASS/SRT directly, must convert to mov_text
+        subtitle_codec = "mov_text"
 
     try:
         # Determine source language ISO
@@ -372,7 +376,7 @@ def main(
                 "-c:a:1",
                 audio_codec,  # Encode dubbed audio
                 "-c:s",
-                "copy",  # Copy subtitles as-is
+                subtitle_codec,  # Use compatible subtitle codec
                 "-metadata:s:a:0",
                 f"language={src_iso}",
                 "-metadata:s:a:0",
