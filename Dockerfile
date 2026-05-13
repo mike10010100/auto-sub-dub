@@ -29,11 +29,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir pyphen rvc-python
 
-# Clone and build s2.cpp with CUDA support
+# Clone and build s2.cpp with CUDA support (using parallel cores for speed)
 RUN git clone --recurse-submodules https://github.com/rodrigomatta/s2.cpp.git \
     && cd s2.cpp \
     && cmake -B build -DS2_CUDA=ON \
-    && cmake --build build --config Release
+    && cmake --build build --config Release --parallel $(nproc)
 
 # Copy project files
 COPY . .
