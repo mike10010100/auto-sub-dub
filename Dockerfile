@@ -30,11 +30,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir pyphen rvc-python
 
 # Clone and build s2.cpp with CUDA support (using parallel cores for speed)
-# We symlink the CUDA stub so the linker finds libcuda.so.1 and pass the path directly to CMake
+# We use LDFLAGS to ensure the linker finds the libcuda.so.1 stub during the build
 RUN git clone --recurse-submodules https://github.com/rodrigomatta/s2.cpp.git \
     && cd s2.cpp \
     && ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
-    && cmake -B build -DS2_CUDA=ON -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs" \
+    && export LDFLAGS="-L/usr/local/cuda/lib64/stubs -Wl,-rpath-link=/usr/local/cuda/lib64/stubs" \
+    && cmake -B build -DS2_CUDA=ON \
     && cmake --build build --config Release --parallel $(nproc)
 
 # Copy project files
