@@ -24,6 +24,19 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 # Set working directory
 WORKDIR /app
 
+# ---------------------------------------------------------
+# CACHE HEAVY COMPILATION: 
+# Clone and build s2.cpp with CUDA support first.
+# This takes a long time, so we put it before COPYing 
+# requirements or project files so Docker can aggressively cache it.
+# ---------------------------------------------------------
+RUN git clone --recurse-submodules https://github.com/rodrigomatta/s2.cpp.git \
+    && cd s2.cpp \
+    && ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && export LDFLAGS="-L/usr/local/cuda/lib64/stubs -Wl,-rpath-link=/usr/local/cuda/lib64/stubs" \
+    && cmake -B build -DS2_CUDA=ON \
+    && cmake --build build --config Release --parallel $(nproc)
+
 # Copy requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -32,15 +45,6 @@ RUN pip install --no-cache-dir --upgrade "hydra-core>=1.3.2"
 
 # Add pip-installed cuDNN to LD_LIBRARY_PATH so WhisperX (CTranslate2) can find libcudnn_ops_infer.so.8
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}
-
-# Clone and build s2.cpp with CUDA support (using parallel cores for speed)
-# We use LDFLAGS to ensure the linker finds the libcuda.so.1 stub during the build
-RUN git clone --recurse-submodules https://github.com/rodrigomatta/s2.cpp.git \
-    && cd s2.cpp \
-    && ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
-    && export LDFLAGS="-L/usr/local/cuda/lib64/stubs -Wl,-rpath-link=/usr/local/cuda/lib64/stubs" \
-    && cmake -B build -DS2_CUDA=ON \
-    && cmake --build build --config Release --parallel $(nproc)
 
 # Copy project files
 COPY . .
