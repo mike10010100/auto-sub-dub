@@ -8,7 +8,7 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     environment:
-      - OLLAMA_NUM_CTX=262144
+      - OLLAMA_NUM_CTX=65536
     deploy:
       resources:
         reservations:
@@ -44,7 +44,7 @@ services:
       - OLLAMA_URL=http://ollama:11434
       - OLLAMA_MODEL=gemma4:26b
       - OLLAMA_AUDIO_MODEL=gemma4:e4b
-      - OLLAMA_NUM_CTX=262144
+      - OLLAMA_NUM_CTX=65536
       - HF_TOKEN=${HF_TOKEN}
     deploy:
       resources:
