@@ -30,6 +30,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir pyphen rvc-python
 RUN pip install --no-cache-dir --upgrade "hydra-core>=1.3.2"
 
+# Add pip-installed cuDNN to LD_LIBRARY_PATH so WhisperX (CTranslate2) can find libcudnn_ops_infer.so.8
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}
+
 # Clone and build s2.cpp with CUDA support (using parallel cores for speed)
 # We use LDFLAGS to ensure the linker finds the libcuda.so.1 stub during the build
 RUN git clone --recurse-submodules https://github.com/rodrigomatta/s2.cpp.git \
