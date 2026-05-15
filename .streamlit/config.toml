@@ -1,6 +1,8 @@
 [server]
 # Disable the watcher that causes recursive import errors with SpeechBrain
 fileWatcherType = "none"
+# Increase file upload limit for large video files (in MB)
+maxUploadSize = 2000
 
 [browser]
 # Reduce startup noise
