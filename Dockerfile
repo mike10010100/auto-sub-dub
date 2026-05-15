@@ -28,6 +28,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir pyphen rvc-python
+RUN pip install --no-cache-dir --upgrade "hydra-core>=1.3.2"
 
 # Clone and build s2.cpp with CUDA support (using parallel cores for speed)
 # We use LDFLAGS to ensure the linker finds the libcuda.so.1 stub during the build
