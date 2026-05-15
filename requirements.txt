@@ -2,6 +2,7 @@ ollama
 TTS
 ffmpeg-python
 demucs
+hydra-core>=1.3.2
 whisperx
 pydub
 audiotsm
