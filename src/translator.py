@@ -315,8 +315,14 @@ class Translator:
         if "<channel|>" in content:
             content = content.split("<channel|>")[-1].strip()
         try:
-            if "{" in content and "}" in content:
+            # Robustly extract JSON using regex
+            json_match = re.search(r'\{.*"translated_text".*\}', content, re.DOTALL)
+            if json_match:
+                content = json_match.group(0)
+            elif "{" in content and "}" in content:
+                # Fallback to basic extraction
                 content = content[content.find("{") : content.rfind("}") + 1]
+
             data = json.loads(content)
             return (data.get("translated_text", "") or "").strip(), bool(data.get("is_song", False))
         except (json.JSONDecodeError, ValueError):
@@ -432,7 +438,13 @@ class Translator:
                 content = resp["message"]["content"].strip()
                 if "<channel|>" in content:
                     content = content.split("<channel|>")[-1].strip()
-                if "{" in content and "}" in content:
+
+                # Robustly extract JSON using regex, looking for the specific structure
+                json_match = re.search(r'\{.*"corrections".*\}', content, re.DOTALL)
+                if json_match:
+                    content = json_match.group(0)
+                elif "{" in content and "}" in content:
+                    # Fallback to basic extraction
                     content = content[content.find("{") : content.rfind("}") + 1]
 
                 data = json.loads(content)
