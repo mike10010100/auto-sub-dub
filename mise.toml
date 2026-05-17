@@ -15,13 +15,17 @@ python scripts/download_fish_models.py
 """
 
 [tasks."setup-seed-vc"]
-description = "Clone Seed-VC and install its dependencies"
+description = "Clone Seed-VC and install its dependencies, then fix conflicts"
 run = """
 if [ ! -d "seed-vc" ]; then
     git clone https://github.com/Plachtaa/seed-vc.git
 fi
 cd seed-vc
 pip install -r requirements.txt
+cd ..
+# Re-assert our pipeline's specific versions that Seed-VC tries to break
+pip install -r requirements.txt
+pip install protobuf>=3.20
 """
 
 [tasks.install]

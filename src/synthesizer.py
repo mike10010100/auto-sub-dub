@@ -320,7 +320,7 @@ class BaseSynthesizer:
             entries = []
             for i, (score, clip, emotion, text, metrics) in enumerate(picked):
                 safe_emotion = emotion.strip("[]") or "NEUTRAL"
-                ref_path = spk_dir / f"ref_{i+1}_{safe_emotion}.wav"
+                ref_path = spk_dir / f"ref_{i + 1}_{safe_emotion}.wav"
                 clip.export(ref_path, format="wav")
                 entries.append({"path": str(ref_path), "emotion": emotion, "text": text})
 

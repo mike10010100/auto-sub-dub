@@ -148,7 +148,7 @@ class Translator:
                 return self.client.chat(model=model, messages=messages, options=options)
             except Exception as e:
                 last_err = e
-                logger.warning(f"Ollama call failed (attempt {i+1}/{attempts}): {e}")
+                logger.warning(f"Ollama call failed (attempt {i + 1}/{attempts}): {e}")
                 time.sleep(1.0 * (i + 1))
         raise last_err
 
@@ -270,8 +270,8 @@ class Translator:
         if target_syllables:
             syllable_rule = (
                 f"7. CRITICAL TIMING: The source line had {target_syllables} syllables. "
-                f"Your translation MUST be between {max(1, int(target_syllables*0.8))} and "
-                f"{int(target_syllables*1.2)} syllables to match the speaker's mouth movements.\n"
+                f"Your translation MUST be between {max(1, int(target_syllables * 0.8))} and "
+                f"{int(target_syllables * 1.2)} syllables to match the speaker's mouth movements.\n"
             )
 
         system_prompt = (
@@ -409,7 +409,7 @@ class Translator:
             for j, seg in enumerate(chunk):
                 src = (seg.get("text") or "").strip()
                 speaker = seg.get("speaker") or "?"
-                lines.append(f"[{i+j}] ({speaker}): {src}")
+                lines.append(f"[{i + j}] ({speaker}): {src}")
 
             context_block = "\n".join(lines)
 

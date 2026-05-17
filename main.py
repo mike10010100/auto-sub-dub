@@ -230,13 +230,13 @@ def main(
             next_start = next_seg.get("effective_start", next_seg.get("start", 0))
             if curr_end > next_start:
                 logger.info(
-                    f"Overlap detected: Segment {i} ({segment.get('speaker')}) ends at {curr_end:.2f}s, Segment {i+1} ({next_seg.get('speaker')}) starts at {next_start:.2f}s"
+                    f"Overlap detected: Segment {i} ({segment.get('speaker')}) ends at {curr_end:.2f}s, Segment {i + 1} ({next_seg.get('speaker')}) starts at {next_start:.2f}s"
                 )
 
         # Log progress every 5 segments
         if i % 5 == 0 or i == len(translated_segments) - 1:
             logger.info(
-                f"Processing segment {i+1}/{len(translated_segments)} (Speaker: {speaker})..."
+                f"Processing segment {i + 1}/{len(translated_segments)} (Speaker: {speaker})..."
             )
 
         # Use the widened placement window if present; fall back to the

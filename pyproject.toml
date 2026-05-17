@@ -1,7 +1,7 @@
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["output", ".venv", "build", "dist"]
+extend-exclude = ["output", ".venv", "build", "dist", "seed-vc", "s2.cpp"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
