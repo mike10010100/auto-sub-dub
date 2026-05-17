@@ -477,7 +477,7 @@ class Translator:
         segments,
         vocals_path,
         target_lang="English",
-        max_workers=2,
+        max_workers=1,
         context_before=5,
         context_after=3,
         subtitle_entries=None,
