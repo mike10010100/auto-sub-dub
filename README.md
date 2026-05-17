@@ -87,6 +87,16 @@ mise run run -- your_video.mp4 --lang "English" \
 
 The dubbed output will be saved in a per-video project folder in the `output/` directory.
 
+### Advanced: RVC Integration (Zero-Accent Dubbing)
+Zero-shot cloning (even with Fish Speech) can sometimes carry over the original speaker's phonetic accent (e.g., a Japanese accent when speaking English). To completely eliminate this and achieve 100% character voice fidelity, you can use **RVC (Retrieval-based Voice Conversion)**.
+
+1. **Train an RVC Model:** Use a community tool like [Applio](https://github.com/IAHispano/Applio) or an RVC WebUI (locally or via Google Colab) to train a voice model for your character. 
+   - *Tip:* You can use the high-quality, isolated reference clips that Auto-Dub automatically generates in the `output/<project_name>/references/` folder as your training dataset!
+2. **Place the Model:** Once you have the `.pth` file for your character, rename it to match the speaker ID assigned by the diarizer (e.g., `SPEAKER_01.pth`).
+3. **Drop it in the folder:** Place the file in the `models/rvc/` directory at the root of the project. (e.g., `models/rvc/SPEAKER_01.pth`).
+
+**How it works:** When Auto-Dub detects an RVC model for a specific speaker, it stops trying to clone their voice directly. Instead, it asks Fish Speech to generate flawless, unaccented native English. It then passes that pristine English audio through your RVC model, "re-skinning" the audio with the character's exact pitch and timbre. The result is perfect acting with zero accent leakage.
+
 ## Development
 
 Install dev tools (ruff, pytest, pytest-cov):
