@@ -45,7 +45,7 @@ RUN git clone https://github.com/Plachtaa/seed-vc.git \
 # Copy requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir pyphen rvc-python
+RUN pip install --no-cache-dir pyphen
 RUN pip install --no-cache-dir --upgrade "hydra-core>=1.3.2"
 
 # Add pip-installed cuDNN to LD_LIBRARY_PATH so WhisperX (CTranslate2) can find libcudnn_ops_infer.so.8
@@ -55,7 +55,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib:${L
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p models/rvc output/audio_segments output/references
+RUN mkdir -p output/audio_segments output/references
 
 # Download Fish Speech models during build
 RUN python scripts/download_fish_models.py

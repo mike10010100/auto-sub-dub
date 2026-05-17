@@ -21,12 +21,9 @@ class BaseSynthesizer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ref_audio_dir = Path("output/references")
         self.ref_audio_dir.mkdir(parents=True, exist_ok=True)
-        self.rvc_models_dir = Path("models/rvc")
-        self.rvc_models_dir.mkdir(parents=True, exist_ok=True)
         self.device = device or get_device()
         self._vad = None
         self._vad_utils = None
-        self._rvc_infer = None
         self._embedding_model = None
         self._embedding_inference = None
 

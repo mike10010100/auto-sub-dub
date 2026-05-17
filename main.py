@@ -421,7 +421,7 @@ if __name__ == "__main__":
         help="Ollama model for audio-informed emotion tagging (e.g. gemma4:e4b)",
     )
     parser.add_argument(
-        "--engine", default="xtts", choices=["xtts", "fish"], help="Synthesis engine to use"
+        "--engine", default="fish", choices=["xtts", "fish"], help="Synthesis engine to use"
     )
     parser.add_argument("--min_speakers", type=int, help="Minimum number of speakers")
     parser.add_argument("--max_speakers", type=int, help="Maximum number of speakers")

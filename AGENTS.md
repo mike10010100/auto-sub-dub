@@ -7,7 +7,7 @@ Auto-Dub is a modular Python application that performs the following steps:
 1.  **Vocal Isolation:** Uses Meta's **Demucs** to separate vocals from background music/noise.
 2.  **Transcription & Diarization:** Uses **WhisperX** (Whisper + Pyannote.audio). Includes a global monkey-patch for `hf_hub_download` to handle the `use_auth_token` vs `token` rename in recent libraries.
 3.  **Hybrid Multimodal Translation:** Calls a local/remote **Ollama** instance (running **Gemma 4 26B**). Uses sequential segment translation with rolling context.
-4.  **Voice Cloning & Synthesis:** Uses **Coqui XTTS v2**. Implements **Multi-Reference Triangulation** (3+ clips per speaker) and **Emotion Conditioning**.
+4.  **Voice Cloning & Synthesis:** Uses **Fish Speech** for unaccented base generation and **Seed-VC** for zero-shot timbre transfer. Implements **Multi-Reference Triangulation** (3+ clips per speaker) and **Emotion Conditioning**.
 5.  **Assembly:** Uses **pydub** for WSOLA time-stretching, **Vocal Ducking** (sidechain compression), and **FFmpeg** for final remuxing.
 
 ## Development Environment

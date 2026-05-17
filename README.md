@@ -87,15 +87,13 @@ mise run run -- your_video.mp4 --lang "English" \
 
 The dubbed output will be saved in a per-video project folder in the `output/` directory.
 
-### Advanced: RVC Integration (Zero-Accent Dubbing)
-Zero-shot cloning (even with Fish Speech) can sometimes carry over the original speaker's phonetic accent (e.g., a Japanese accent when speaking English). To completely eliminate this and achieve 100% character voice fidelity, you can use **RVC (Retrieval-based Voice Conversion)**.
+### Zero-Accent Voice Conversion (Seed-VC)
+Zero-shot cloning (even with Fish Speech) can sometimes carry over the original speaker's phonetic accent (e.g., a Japanese accent when speaking English). To completely eliminate this and achieve 100% character voice fidelity, Auto-Dub now has **Seed-VC** fully integrated.
 
-1. **Train an RVC Model:** Use a community tool like [Applio](https://github.com/IAHispano/Applio) or an RVC WebUI (locally or via Google Colab) to train a voice model for your character. 
-   - *Tip:* You can use the high-quality, isolated reference clips that Auto-Dub automatically generates in the `output/<project_name>/references/` folder as your training dataset!
-2. **Place the Model:** Once you have the `.pth` file for your character, rename it to match the speaker ID assigned by the diarizer (e.g., `SPEAKER_01.pth`).
-3. **Drop it in the folder:** Place the file in the `models/rvc/` directory at the root of the project. (e.g., `models/rvc/SPEAKER_01.pth`).
-
-**How it works:** When Auto-Dub detects an RVC model for a specific speaker, it stops trying to clone their voice directly. Instead, it asks Fish Speech to generate flawless, unaccented native English. It then passes that pristine English audio through your RVC model, "re-skinning" the audio with the character's exact pitch and timbre. The result is perfect acting with zero accent leakage.
+**How it works automatically:**
+1. Auto-Dub asks Fish Speech to generate flawless, natively accented English audio (acting as a generic voice actor).
+2. The pipeline then automatically passes that pristine English audio through the Seed-VC zero-shot engine, alongside the perfectly isolated Japanese reference clip it extracted earlier.
+3. Seed-VC instantly "re-skins" the English audio with the character's exact pitch and timbre. The result is perfect acting with zero accent leakage, requiring **zero manual model training.**
 
 ## Development
 

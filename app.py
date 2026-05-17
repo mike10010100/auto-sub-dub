@@ -31,7 +31,7 @@ This tool uses a multi-stage AI pipeline to dub videos into other languages:
 1. **Vocal Isolation** (Demucs)
 2. **Transcription & Diarization** (WhisperX)
 3. **Multimodal Translation** (Gemma 4 via Ollama)
-4. **Voice Cloning & Synthesis** (Coqui XTTS v2)
+4. **Zero-Accent Voice Synthesis** (Fish Speech + Seed-VC)
 5. **Vocal Ducking & Remuxing** (pydub & FFmpeg)
 """)
 
@@ -100,8 +100,8 @@ with st.sidebar:
     engine = st.selectbox(
         "Synthesis Engine",
         ["xtts", "fish"],
-        index=0,
-        help="xtts: Fast zero-shot cloning (24kHz). fish: High-fidelity (44.1kHz) with emotion tagging (requires s2.cpp).",
+        index=1,
+        help="fish (default): High-fidelity (44.1kHz) with zero-accent Seed-VC timbre transfer. xtts: Legacy fast zero-shot cloning (24kHz).",
     )
 
     col1, col2 = st.columns(2)
