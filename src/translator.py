@@ -4,7 +4,6 @@ import logging
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 import pyphen
 from ollama import Client
@@ -501,24 +500,19 @@ class Translator:
         )
         audio = AudioSegment.from_wav(vocals_path)
 
-        # --- Pass 1: audio-informed emotion tagging (parallel). ---
-        def tag_one(idx_seg):
-            idx, segment = idx_seg
+        # --- Pass 1: audio-informed emotion tagging (sequential). ---
+        tag_results = []
+        for idx, segment in tqdm(
+            enumerate(segments), total=len(segments), desc="Tagging emotion (audio)"
+        ):
             original_text = (segment.get("text") or "").strip()
             if not original_text:
-                return idx, "[NEUTRAL]"
+                tag_results.append((idx, "[NEUTRAL]"))
+                continue
             clip = audio[int(segment.get("start", 0) * 1000) : int(segment.get("end", 0) * 1000)]
             audio_bytes = self._clip_to_wav_bytes(clip)
-            return idx, self._tag_emotion(audio_bytes, original_text)
+            tag_results.append((idx, self._tag_emotion(audio_bytes, original_text)))
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            tag_results = list(
-                tqdm(
-                    executor.map(tag_one, list(enumerate(segments))),
-                    total=len(segments),
-                    desc="Tagging emotion (audio)",
-                )
-            )
         emotions = {idx: tag for idx, tag in tag_results}
 
         # --- Pass 2: text translation sequentially with rolling context. ---

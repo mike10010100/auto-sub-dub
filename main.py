@@ -153,7 +153,6 @@ def main(
             logger.info(
                 f"Loaded {len(subtitle_entries)} {target_lang} subtitle entries as reconciliation hints."
             )
-
         update_progress(f"Step 4: Translating dialogue to {target_lang} (Gemma 4)...")
         translated_segments = translator.translate_segments_multimodal(
             transcript["segments"],
