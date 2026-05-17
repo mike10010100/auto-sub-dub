@@ -583,10 +583,6 @@ class FishSynthesizer(BaseSynthesizer):
             self.tokenizer_path,
             "-text",
             formatted_text,
-            "-pa",
-            ref_wav,
-            "-pt",
-            ref_text,
             "-o",
             str(output_path),
             "-temp",
@@ -597,6 +593,18 @@ class FishSynthesizer(BaseSynthesizer):
             str(top_k),
             "--trim-silence",
         ]
+
+        # RVC Decoupling: If an RVC model exists for this character, we DO NOT
+        # pass the Japanese prompt audio. We want Fish Speech to use its default,
+        # native English voice for perfect acting without accent leakage. RVC will
+        # then apply the character's timbre later.
+        rvc_model_path = self.rvc_models_dir / f"{speaker_id}.pth"
+        if not rvc_model_path.exists():
+            cmd.extend(["-pa", ref_wav, "-pt", ref_text])
+        else:
+            logger.info(
+                f"RVC model detected for {speaker_id}. Bypassing acoustic prompt for native English generation."
+            )
 
         if self.device == "cuda":
             cmd.extend(["-c", "0"])
