@@ -301,9 +301,11 @@ def main(
                 top_p=kwargs.get("tts_top_p", 0.8),
             )
 
-            # Apply RVC Skin (Identity Transfer) if a model exists for this speaker
+            # Apply Seed-VC Zero-Shot Skin (Identity Transfer)
             if clip_path:
-                clip_path = synthesizer.apply_rvc(clip_path, speaker)
+                clip_path = synthesizer.apply_seed_vc(
+                    clip_path, speaker, references[speaker], emotion_tag
+                )
         else:
             logger.info(f"Skipping synthesis for segment {i}, using existing: {clip_path}")
 

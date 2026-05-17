@@ -30,35 +30,49 @@ class BaseSynthesizer:
         self._embedding_model = None
         self._embedding_inference = None
 
-    def apply_rvc(self, audio_path, speaker_id):
-        """Apply RVC timbre transfer if a model for the speaker exists."""
-        model_path = self.rvc_models_dir / f"{speaker_id}.pth"
-        if not model_path.exists():
-            return audio_path
+    def apply_seed_vc(self, audio_path, speaker_id, speaker_refs, emotion=None):
+        """Apply Seed-VC zero-shot timbre transfer to decouple accent from voice identity."""
+        valid_refs = [r for r in speaker_refs if r.get("text")]
+        if not valid_refs:
+            valid_refs = speaker_refs
+        ref_entry = next((r for r in valid_refs if r.get("emotion") == emotion), valid_refs[0])
+        ref_wav_path = ref_entry["path"]
 
-        logger.info(f"Applying RVC skin for {speaker_id}...")
+        logger.info(f"Applying Seed-VC zero-shot skin for {speaker_id}...")
         try:
-            try:
-                from rvc_python.infer import RVCInference
-            except ImportError:
-                logger.error(
-                    f"RVC model found for {speaker_id}, but 'rvc-python' is not installed. "
-                    "Please run 'pip install rvc-python' to enable timbre transfer."
-                )
-                return audio_path
+            output_dir = self.output_dir / "seed_vc_temp"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / Path(audio_path).name
 
-            if self._rvc_infer is None:
-                self._rvc_infer = RVCInference(device=self.device)
+            # Run Seed-VC inference script as a subprocess
+            command = [
+                "python",
+                "seed-vc/inference.py",
+                "--source",
+                str(audio_path),
+                "--target",
+                str(ref_wav_path),
+                "--output",
+                str(output_dir),
+                "--diffusion-steps",
+                "25",
+                "--length-adjust",
+                "1.0",
+            ]
 
-            output_path = str(audio_path).replace(".wav", "_rvc.wav")
-            self._rvc_infer.load_model(str(model_path))
-            self._rvc_infer.infer_file(str(audio_path), output_path)
+            if self.device == "cuda":
+                command.extend(["--fp16", "True"])
 
-            # Clean up original and return RVC version
-            os.replace(output_path, str(audio_path))
+            subprocess.run(command, check=True, capture_output=True)
+
+            # Seed-VC creates the file in the output dir with the same name.
+            if output_path.exists():
+                os.replace(output_path, str(audio_path))
             return audio_path
         except Exception as e:
-            logger.error(f"RVC inference failed for {speaker_id}: {e}")
+            logger.error(f"Seed-VC inference failed for {speaker_id}: {e}")
+            if hasattr(e, "stderr") and e.stderr:
+                logger.error(f"Seed-VC Error: {e.stderr.decode()}")
             return audio_path
 
     def _get_embeddings(self, clips):
@@ -568,10 +582,6 @@ class FishSynthesizer(BaseSynthesizer):
             logger.error(f"No valid references with text found for speaker {speaker_id}")
             return None
 
-        ref_entry = next((r for r in valid_refs if r["emotion"] == emotion), valid_refs[0])
-        ref_wav = ref_entry["path"]
-        ref_text = ref_entry["text"]
-
         # Format the text with emotion tags for Fish Speech
         formatted_text = f"{emotion} {text}" if emotion and emotion.startswith("[") else text
 
@@ -594,17 +604,9 @@ class FishSynthesizer(BaseSynthesizer):
             "--trim-silence",
         ]
 
-        # RVC Decoupling: If an RVC model exists for this character, we DO NOT
-        # pass the Japanese prompt audio. We want Fish Speech to use its default,
-        # native English voice for perfect acting without accent leakage. RVC will
-        # then apply the character's timbre later.
-        rvc_model_path = self.rvc_models_dir / f"{speaker_id}.pth"
-        if not rvc_model_path.exists():
-            cmd.extend(["-pa", ref_wav, "-pt", ref_text])
-        else:
-            logger.info(
-                f"RVC model detected for {speaker_id}. Bypassing acoustic prompt for native English generation."
-            )
+        logger.info(
+            "Seed-VC Integration: Bypassing Fish Speech acoustic prompt for generic voice generation."
+        )
 
         if self.device == "cuda":
             cmd.extend(["-c", "0"])

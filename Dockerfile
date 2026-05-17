@@ -37,6 +37,11 @@ RUN git clone --recurse-submodules https://github.com/rodrigomatta/s2.cpp.git \
     && cmake -B build -DS2_CUDA=ON \
     && cmake --build build --config Release --parallel $(nproc)
 
+# Clone Seed-VC for zero-shot timbre transfer
+RUN git clone https://github.com/Plachtaa/seed-vc.git \
+    && cd seed-vc \
+    && pip install --no-cache-dir -r requirements.txt
+
 # Copy requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
