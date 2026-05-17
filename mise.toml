@@ -14,6 +14,16 @@ cd ..
 python scripts/download_fish_models.py
 """
 
+[tasks."setup-seed-vc"]
+description = "Clone Seed-VC and install its dependencies"
+run = """
+if [ ! -d "seed-vc" ]; then
+    git clone https://github.com/Plachtaa/seed-vc.git
+fi
+cd seed-vc
+pip install -r requirements.txt
+"""
+
 [tasks.install]
 description = "Install project dependencies"
 run = "pip install -r requirements.txt && pip install pyphen"
