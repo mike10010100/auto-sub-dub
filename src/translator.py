@@ -335,11 +335,16 @@ class Translator:
             elif "{" in content and "}" in content:
                 # Fallback to basic extraction
                 content = content[content.find("{") : content.rfind("}") + 1]
+            else:
+                # The LLM completely ignored the JSON instruction and just returned text.
+                return content.strip(), False
 
             data = json.loads(content)
             return (data.get("translated_text", "") or "").strip(), bool(data.get("is_song", False))
         except (json.JSONDecodeError, ValueError):
-            logger.debug(f"Translation JSON decode failed. Raw output: {raw_content[:200]}...")
+            logger.debug(
+                f"Translation JSON decode failed. Raw output: {repr(raw_content[:200])}..."
+            )
             return content.strip(), False
 
     def _translate_text(
@@ -429,7 +434,7 @@ class Translator:
             context_block = "\n".join(lines)
 
             system_prompt = (
-                "<|think|>You are a logic analyzer. Review the following dialogue transcript. "
+                "You are a logic analyzer. Review the following dialogue transcript. "
                 "The acoustic diarization AI often misidentifies speakers when their voices are similar or overlapping. "
                 "Look for logical breaks in conversational flow (e.g., a person answering their own question, "
                 "or a sudden shift in tone/topic attributed to the same speaker). "
@@ -472,13 +477,19 @@ class Translator:
                 elif "{" in content and "}" in content:
                     # Fallback to basic extraction
                     content = content[content.find("{") : content.rfind("}") + 1]
+                else:
+                    # No JSON found at all. The LLM ignored instructions. Fallback to empty.
+                    logger.warning(
+                        f"Semantic Diarization Review returned no JSON for chunk {i}. Returning empty corrections. Raw output: {repr(raw_content[:200])}"
+                    )
+                    continue
 
                 try:
                     data = json.loads(content)
                     corrections = data.get("corrections", [])
                 except json.JSONDecodeError as e:
                     logger.warning(
-                        f"Semantic Diarization Review failed to parse JSON for chunk {i}: {e}. Raw output: {raw_content[:200]}..."
+                        f"Semantic Diarization Review failed to parse JSON for chunk {i}: {e}. Raw output: {repr(raw_content[:200])}..."
                     )
                     continue
 
