@@ -138,14 +138,14 @@ class Translator:
         return buf.getvalue()
 
     def _chat_with_retry(
-        self, *, model, messages, options, attempts=3
+        self, *, model, messages, options, attempts=3, **kwargs
     ):  # pragma: no cover  (Ollama IO)
         # Audio inference on Ollama is currently crash-prone (see #15333),
         # so retry with linear backoff.
         last_err = None
         for i in range(attempts):
             try:
-                return self.client.chat(model=model, messages=messages, options=options)
+                return self.client.chat(model=model, messages=messages, options=options, **kwargs)
             except Exception as e:
                 last_err = e
                 logger.warning(f"Ollama call failed (attempt {i + 1}/{attempts}): {e}")
@@ -308,7 +308,14 @@ class Translator:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
             ],
-            options={"temperature": 1.0, "top_p": 0.95, "top_k": 64, "num_ctx": self.num_ctx},
+            options={
+                "temperature": 1.0,
+                "top_p": 0.95,
+                "top_k": 64,
+                "num_ctx": self.num_ctx,
+                "num_predict": 512,
+            },
+            format="json",
         )
         content = resp["message"]["content"].strip()
         if "<channel|>" in content:
@@ -431,7 +438,13 @@ class Translator:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": f"TRANSCRIPT CHUNK:\n{context_block}"},
                     ],
-                    options={"temperature": 0.2, "top_p": 0.95, "num_ctx": self.num_ctx},
+                    options={
+                        "temperature": 0.2,
+                        "top_p": 0.95,
+                        "num_ctx": self.num_ctx,
+                        "num_predict": 1024,
+                    },
+                    format="json",
                 )
 
                 content = resp["message"]["content"].strip()

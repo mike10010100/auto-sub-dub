@@ -29,11 +29,10 @@ class BaseSynthesizer:
 
     def apply_seed_vc(self, audio_path, speaker_id, speaker_refs, emotion=None):
         """Apply Seed-VC zero-shot timbre transfer to decouple accent from voice identity."""
-        valid_refs = [r for r in speaker_refs if r.get("text")]
-        if not valid_refs:
-            valid_refs = speaker_refs
-        ref_entry = next((r for r in valid_refs if r.get("emotion") == emotion), valid_refs[0])
-        ref_wav_path = ref_entry["path"]
+        # For Seed-VC, we MUST use exactly ONE consistent reference clip per speaker
+        # across the entire video to prevent their voice/acoustic environment from changing
+        # between lines. We use the first (primary) reference.
+        ref_wav_path = speaker_refs[0]["path"]
 
         logger.info(f"Applying Seed-VC zero-shot skin for {speaker_id}...")
         try:
