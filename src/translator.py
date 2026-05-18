@@ -315,11 +315,18 @@ class Translator:
                 "num_ctx": self.num_ctx,
                 "num_predict": 512,
             },
-            format="json",
         )
-        content = resp["message"]["content"].strip()
+        raw_content = resp["message"]["content"].strip()
+        content = raw_content
         if "<channel|>" in content:
             content = content.split("<channel|>")[-1].strip()
+
+        # Remove Gemma thinking block if present
+        if "</|think|>" in content:
+            content = content.split("</|think|>")[-1].strip()
+        elif "</think>" in content:
+            content = content.split("</think>")[-1].strip()
+
         try:
             # Robustly extract JSON using regex
             json_match = re.search(r'\{.*"translated_text".*\}', content, re.DOTALL)
@@ -332,6 +339,7 @@ class Translator:
             data = json.loads(content)
             return (data.get("translated_text", "") or "").strip(), bool(data.get("is_song", False))
         except (json.JSONDecodeError, ValueError):
+            logger.debug(f"Translation JSON decode failed. Raw output: {raw_content[:200]}...")
             return content.strip(), False
 
     def _translate_text(
@@ -444,12 +452,18 @@ class Translator:
                         "num_ctx": self.num_ctx,
                         "num_predict": 1024,
                     },
-                    format="json",
                 )
 
-                content = resp["message"]["content"].strip()
+                raw_content = resp["message"]["content"].strip()
+                content = raw_content
                 if "<channel|>" in content:
                     content = content.split("<channel|>")[-1].strip()
+
+                # Remove Gemma thinking block if present
+                if "</|think|>" in content:
+                    content = content.split("</|think|>")[-1].strip()
+                elif "</think>" in content:
+                    content = content.split("</think>")[-1].strip()
 
                 # Robustly extract JSON using regex, looking for the specific structure
                 json_match = re.search(r'\{.*"corrections".*\}', content, re.DOTALL)
@@ -459,8 +473,14 @@ class Translator:
                     # Fallback to basic extraction
                     content = content[content.find("{") : content.rfind("}") + 1]
 
-                data = json.loads(content)
-                corrections = data.get("corrections", [])
+                try:
+                    data = json.loads(content)
+                    corrections = data.get("corrections", [])
+                except json.JSONDecodeError as e:
+                    logger.warning(
+                        f"Semantic Diarization Review failed to parse JSON for chunk {i}: {e}. Raw output: {raw_content[:200]}..."
+                    )
+                    continue
 
                 for corr in corrections:
                     idx = corr.get("index")
