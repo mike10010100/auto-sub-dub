@@ -438,11 +438,13 @@ class Translator:
                 "The acoustic diarization AI often misidentifies speakers when their voices are similar or overlapping. "
                 "Look for logical breaks in conversational flow (e.g., a person answering their own question, "
                 "or a sudden shift in tone/topic attributed to the same speaker). "
-                "If you find an error, correct the speaker label to match the logical flow of the conversation. "
-                "You MUST respond with a JSON object. Do not explain yourself. "
+                "You MUST respond in two parts. First, write a brief <reasoning> block explaining the flow of the conversation and checking for errors. "
+                "Second, output a JSON object containing an array of corrections. "
                 "If corrections are needed, return:\n"
+                "<reasoning>\nSpeaker 1 asks a question, but Speaker 1 is also labeled as answering it. This is a logical error. Speaker 2 should be the answerer.\n</reasoning>\n"
                 '```json\n{"corrections": [{"index": 12, "new_speaker": "SPEAKER_02"}]}\n```\n'
-                "If NO corrections are needed, you MUST return:\n"
+                "If NO corrections are needed, return:\n"
+                "<reasoning>\nThe conversation flows logically. No single speaker answers their own questions or shifts topics abruptly.\n</reasoning>\n"
                 '```json\n{"corrections": []}\n```'
             )
 
