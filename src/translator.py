@@ -439,9 +439,11 @@ class Translator:
                 "Look for logical breaks in conversational flow (e.g., a person answering their own question, "
                 "or a sudden shift in tone/topic attributed to the same speaker). "
                 "If you find an error, correct the speaker label to match the logical flow of the conversation. "
-                "Return ONLY a JSON object containing an array of corrections (after your thinking block). "
-                'Format: {"corrections": [{"index": 12, "new_speaker": "SPEAKER_02"}]}\n'
-                'If no corrections are needed, return an empty array: {"corrections": []}.'
+                "You MUST respond with a JSON object. Do not explain yourself. "
+                "If corrections are needed, return:\n"
+                '```json\n{"corrections": [{"index": 12, "new_speaker": "SPEAKER_02"}]}\n```\n'
+                "If NO corrections are needed, you MUST return:\n"
+                '```json\n{"corrections": []}\n```'
             )
 
             try:
