@@ -275,7 +275,7 @@ class Translator:
             )
 
         system_prompt = (
-            "<|think|>You are a professional video translator and voice director. "
+            "You are a professional video translator and voice director. "
             f"Translate subtitles into {target_lang}.\n\n"
             "RULES:\n"
             f"1. Output natural {target_lang} that preserves speaker intent.\n"
