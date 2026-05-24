@@ -241,6 +241,7 @@ class Translator:
         context_block="",
         subtitle_hint="",
         target_syllables=None,
+        think_translation=False,
     ):
         unit = "characters" if target_lang in CHARS_PER_SECOND else "words"
         extra = (
@@ -304,27 +305,31 @@ class Translator:
             f"Budget: {budget} {unit}. Translate line: '{original_text}'"
         )
         # First attempt: Try with thinking enabled but a reasonably high token limit (1024)
-        resp = self._chat_with_retry(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg},
-            ],
-            options={
-                "temperature": 1.0,
-                "top_p": 0.95,
-                "top_k": 64,
-                "num_ctx": self.num_ctx,
-                "num_predict": 1024,
-            },
-        )
-        raw_content = resp["message"]["content"].strip()
-
-        # Fallback attempt: If content is empty (model hit token limit during thinking), retry with think=False
-        if not raw_content:
-            logger.info(
-                "Translation first attempt returned empty (truncated reasoning). Retrying with think=False..."
+        if think_translation:
+            resp = self._chat_with_retry(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_msg},
+                ],
+                options={
+                    "temperature": 1.0,
+                    "top_p": 0.95,
+                    "top_k": 64,
+                    "num_ctx": self.num_ctx,
+                    "num_predict": 1024,
+                },
             )
+            raw_content = resp["message"]["content"].strip()
+        else:
+            raw_content = ""
+
+        # Fallback attempt: If content is empty (model hit token limit during thinking or thinking disabled), retry with think=False
+        if not raw_content:
+            if think_translation:
+                logger.info(
+                    "Translation first attempt returned empty (truncated reasoning). Retrying with think=False..."
+                )
             resp = self._chat_with_retry(
                 model=self.model,
                 messages=[
@@ -381,6 +386,7 @@ class Translator:
         subtitle_hint="",
         overrun_ratio=1.2,
         source_lang="Japanese",
+        think_translation=False,
     ):
         """Translate; if the result wouldn't fit in the source window, retry once with a tighter budget."""
         budget = _length_budget(duration, target_lang, headroom=1.0)
@@ -397,6 +403,7 @@ class Translator:
             context_block=context_block,
             subtitle_hint=subtitle_hint,
             target_syllables=source_syllables,
+            think_translation=think_translation,
         )
         if not translated:
             return original_text, is_song
@@ -427,6 +434,7 @@ class Translator:
             context_block=context_block,
             subtitle_hint=subtitle_hint,
             target_syllables=source_syllables,
+            think_translation=think_translation,
         )
         if retry and _estimate_spoken_duration(retry, target_lang) < est:
             return retry, is_song_retry or is_song
@@ -585,6 +593,7 @@ class Translator:
         context_after=3,
         subtitle_entries=None,
         source_lang="Japanese",
+        think_translation=False,
     ):
         """
         Two-pass translation:
@@ -650,6 +659,7 @@ class Translator:
                     context_block=context_block,
                     subtitle_hint=subtitle_hint,
                     source_lang=source_lang,
+                    think_translation=think_translation,
                 )
             except Exception as e:
                 logger.error(f"Translation failed for segment {idx}: {e}")

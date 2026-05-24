@@ -120,6 +120,12 @@ with st.sidebar:
         help="Use Gemma 4 to logically review turn-taking. Disabled by default to prevent reference contamination.",
     )
 
+    think_translation = st.checkbox(
+        "Enable Translation Reasoning (Thinking)",
+        value=False,
+        help="Enable Gemma 4 thinking trace during translation. Not recommended as it increases translation time significantly.",
+    )
+
     st.divider()
     st.subheader("Synthesis Quality (Fish Only)")
     tts_temp = st.slider(
@@ -188,6 +194,7 @@ if uploaded_file is not None:
                     tts_temp=float(tts_temp),
                     tts_top_p=float(tts_top_p),
                     semantic_review=semantic_review,
+                    think_translation=think_translation,
                     progress_callback=progress_cb,
                 )
 

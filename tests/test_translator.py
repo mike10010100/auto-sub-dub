@@ -158,6 +158,7 @@ def test_translate_once_fallback():
         duration=5.0,
         target_lang="English",
         budget=10,
+        think_translation=True,
     )
 
     assert res == "Hello"

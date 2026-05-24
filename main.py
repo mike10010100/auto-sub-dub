@@ -80,6 +80,7 @@ def main(
     engine="xtts",
     progress_callback=None,
     semantic_review=False,
+    think_translation=False,
     **kwargs,
 ):  # pragma: no cover
     def update_progress(msg):
@@ -200,6 +201,7 @@ def main(
             vocals_path=vocals,
             target_lang=target_lang,
             subtitle_entries=subtitle_entries,
+            think_translation=think_translation,
         )
         transcript["translated_segments"] = translated_segments
         transcriber.save_transcript(transcript, translated_transcript_path)
@@ -499,6 +501,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable LLM-based semantic diarization review (disabled by default)",
     )
+    parser.add_argument(
+        "--think-translation",
+        action="store_true",
+        help="Enable LLM reasoning (thinking trace) for translation (disabled by default)",
+    )
 
     args = parser.parse_args()
     main(
@@ -515,4 +522,5 @@ if __name__ == "__main__":
         tts_temp=args.tts_temp,
         tts_top_p=args.tts_top_p,
         semantic_review=args.semantic_review,
+        think_translation=args.think_translation,
     )
