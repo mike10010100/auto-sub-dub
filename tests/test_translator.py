@@ -185,7 +185,10 @@ def test_review_diarization_fallback():
 
     translator._chat_with_retry = MagicMock(side_effect=[resp1, resp2])
 
-    segments = [{"text": "Hello", "speaker": "SPEAKER_01"}]
+    segments = [
+        {"text": "Hello", "speaker": "SPEAKER_01"},
+        {"text": "Hi", "speaker": "SPEAKER_02"},
+    ]
     reviewed = translator.review_diarization(segments)
 
     assert reviewed[0]["speaker"] == "SPEAKER_02"

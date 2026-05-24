@@ -442,6 +442,9 @@ class Translator:
 
         logger.info(f"Starting Semantic Diarization Review for {len(segments)} segments...")
 
+        valid_speakers = sorted({s.get("speaker") for s in segments if s.get("speaker")})
+        logger.info(f"Valid speakers for diarization review: {', '.join(valid_speakers)}")
+
         chunk_size = 25
         out_segments = [s.copy() for s in segments]
 
@@ -462,6 +465,9 @@ class Translator:
                 "The acoustic diarization AI often misidentifies speakers when their voices are similar or overlapping. "
                 "Look for logical breaks in conversational flow (e.g., a person answering their own question, "
                 "or a sudden shift in tone/topic attributed to the same speaker). "
+                f"You MUST ONLY choose speaker labels from this list of valid speakers: {', '.join(valid_speakers)}. "
+                "Do NOT invent new speaker labels, do NOT merge speaker labels (e.g., SPEAKER_01_AND_02), "
+                "and do NOT use any speaker label not in the valid list. "
                 "You MUST respond in two parts. First, write a brief <reasoning> block explaining the flow of the conversation and checking for errors. "
                 "Second, output a JSON object containing an array of corrections. "
                 "If corrections are needed, return:\n"
@@ -551,6 +557,11 @@ class Translator:
                         and isinstance(idx, int)
                         and i <= idx < i + chunk_size
                     ):
+                        if new_spk not in valid_speakers:
+                            logger.warning(
+                                f"  Semantic Review returned invalid/hallucinated speaker '{new_spk}'. Ignoring."
+                            )
+                            continue
                         old_spk = out_segments[idx].get("speaker")
                         if old_spk != new_spk:
                             logger.info(

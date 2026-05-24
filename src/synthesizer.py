@@ -26,6 +26,7 @@ class BaseSynthesizer:
         self._vad_utils = None
         self._embedding_model = None
         self._embedding_inference = None
+        self._seed_vc_models = None
 
     def apply_seed_vc(self, audio_path, speaker_id, speaker_refs, emotion=None):
         """Apply Seed-VC zero-shot timbre transfer to decouple accent from voice identity."""
@@ -40,26 +41,44 @@ class BaseSynthesizer:
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = output_dir / Path(audio_path).name
 
-            # Run Seed-VC inference script as a subprocess
-            command = [
-                "python",
-                "seed-vc/inference.py",
-                "--source",
-                str(audio_path),
-                "--target",
-                str(ref_wav_path),
-                "--output",
-                str(output_dir),
-                "--diffusion-steps",
-                "25",
-                "--length-adjust",
-                "1.0",
-            ]
+            if self._seed_vc_models is None:
+                import argparse
+                import sys
 
-            if self.device == "cuda":
-                command.extend(["--fp16", "True"])
+                seed_vc_path = str(Path(__file__).parent.parent / "seed-vc")
+                if seed_vc_path not in sys.path:
+                    sys.path.insert(0, seed_vc_path)
 
-            subprocess.run(command, check=True, capture_output=True)
+                # Set HF cache environment variable
+                os.environ["HF_HUB_CACHE"] = "./checkpoints/hf_cache"
+
+                import inference
+
+                # Create a mock args namespace
+                args = argparse.Namespace(
+                    source=None,
+                    target=None,
+                    output=None,
+                    diffusion_steps=25,
+                    length_adjust=1.0,
+                    inference_cfg_rate=0.7,
+                    f0_condition=True,
+                    auto_f0_adjust=True,
+                    semi_tone_shift=0,
+                    checkpoint=None,
+                    config=None,
+                    fp16=(self.device == "cuda"),
+                )
+
+                logger.info("Initializing Seed-VC in-process (loading 44k F0 model)...")
+                loaded = inference.load_models(args)
+                self._seed_vc_models = (loaded, args)
+
+            # Extract loaded models
+            loaded_models, args = self._seed_vc_models
+
+            # Execute conversion in-process
+            self._run_seed_vc_in_process(loaded_models, args, audio_path, ref_wav_path, output_path)
 
             # Seed-VC creates the file in the output dir with the same name.
             if output_path.exists():
@@ -67,9 +86,191 @@ class BaseSynthesizer:
             return audio_path
         except Exception as e:
             logger.error(f"Seed-VC inference failed for {speaker_id}: {e}")
-            if hasattr(e, "stderr") and e.stderr:
-                logger.error(f"Seed-VC Error: {e.stderr.decode()}")
+            import traceback
+
+            logger.error(traceback.format_exc())
             return audio_path
+
+    def _run_seed_vc_in_process(self, loaded_models, args, source_path, target_path, output_path):
+        import os
+
+        import librosa
+        import numpy as np
+        import torch
+        import torchaudio
+        from inference import crossfade
+
+        with torch.no_grad():
+            model, semantic_fn, f0_fn, vocoder_fn, campplus_model, mel_fn, mel_fn_args = (
+                loaded_models
+            )
+            sr = mel_fn_args["sampling_rate"]
+            f0_condition = args.f0_condition
+            auto_f0_adjust = args.auto_f0_adjust
+            pitch_shift = args.semi_tone_shift
+
+            # Load audio using the proper sampling rate
+            source_audio, _ = librosa.load(source_path, sr=sr)
+            ref_audio, _ = librosa.load(target_path, sr=sr)
+
+            device = torch.device(self.device)
+
+            # Process audio
+            source_audio = torch.tensor(source_audio).unsqueeze(0).float().to(device)
+            ref_audio = torch.tensor(ref_audio[: sr * 25]).unsqueeze(0).float().to(device)
+
+            # Resample
+            converted_waves_16k = torchaudio.functional.resample(source_audio, sr, 16000)
+            if converted_waves_16k.size(-1) <= 16000 * 30:
+                S_alt = semantic_fn(converted_waves_16k)
+            else:
+                overlapping_time = 5
+                S_alt_list = []
+                buffer = None
+                traversed_time = 0
+                while traversed_time < converted_waves_16k.size(-1):
+                    if buffer is None:
+                        chunk = converted_waves_16k[:, traversed_time : traversed_time + 16000 * 30]
+                    else:
+                        chunk = torch.cat(
+                            [
+                                buffer,
+                                converted_waves_16k[
+                                    :,
+                                    traversed_time : traversed_time
+                                    + 16000 * (30 - overlapping_time),
+                                ],
+                            ],
+                            dim=-1,
+                        )
+                    S_alt = semantic_fn(chunk)
+                    if traversed_time == 0:
+                        S_alt_list.append(S_alt)
+                    else:
+                        S_alt_list.append(S_alt[:, 50 * overlapping_time :])
+                    buffer = chunk[:, -16000 * overlapping_time :]
+                    traversed_time += (
+                        30 * 16000
+                        if traversed_time == 0
+                        else chunk.size(-1) - 16000 * overlapping_time
+                    )
+                S_alt = torch.cat(S_alt_list, dim=1)
+
+            ori_waves_16k = torchaudio.functional.resample(ref_audio, sr, 16000)
+            S_ori = semantic_fn(ori_waves_16k)
+
+            mel = mel_fn(source_audio.to(device).float())
+            mel2 = mel_fn(ref_audio.to(device).float())
+
+            target_lengths = torch.LongTensor([int(mel.size(2) * 1.0)]).to(mel.device)
+            target2_lengths = torch.LongTensor([mel2.size(2)]).to(mel2.device)
+
+            feat2 = torchaudio.compliance.kaldi.fbank(
+                ori_waves_16k, num_mel_bins=80, dither=0, sample_frequency=16000
+            )
+            feat2 = feat2 - feat2.mean(dim=0, keepdim=True)
+            style2 = campplus_model(feat2.unsqueeze(0))
+
+            if f0_condition:
+                F0_ori = f0_fn(ori_waves_16k[0], thred=0.03)
+                F0_alt = f0_fn(converted_waves_16k[0], thred=0.03)
+
+                F0_ori = torch.from_numpy(F0_ori).to(device)[None]
+                F0_alt = torch.from_numpy(F0_alt).to(device)[None]
+
+                voiced_F0_ori = F0_ori[F0_ori > 1]
+                voiced_F0_alt = F0_alt[F0_alt > 1]
+
+                log_f0_alt = torch.log(F0_alt + 1e-5)
+                voiced_log_f0_ori = torch.log(voiced_F0_ori + 1e-5)
+                voiced_log_f0_alt = torch.log(voiced_F0_alt + 1e-5)
+                median_log_f0_ori = torch.median(voiced_log_f0_ori)
+                median_log_f0_alt = torch.median(voiced_log_f0_alt)
+
+                # shift alt log f0 level to ori log f0 level
+                shifted_log_f0_alt = log_f0_alt.clone()
+                if auto_f0_adjust:
+                    shifted_log_f0_alt[F0_alt > 1] = (
+                        log_f0_alt[F0_alt > 1] - median_log_f0_alt + median_log_f0_ori
+                    )
+                shifted_f0_alt = torch.exp(shifted_log_f0_alt)
+                if pitch_shift != 0:
+                    from inference import adjust_f0_semitones
+
+                    shifted_f0_alt[F0_alt > 1] = adjust_f0_semitones(
+                        shifted_f0_alt[F0_alt > 1], pitch_shift
+                    )
+            else:
+                F0_ori = None
+                F0_alt = None
+                shifted_f0_alt = None
+
+            # Length regulation
+            cond, _, codes, commitment_loss, codebook_loss = model.length_regulator(
+                S_alt, ylens=target_lengths, n_quantizers=3, f0=shifted_f0_alt
+            )
+            prompt_condition, _, codes, commitment_loss, codebook_loss = model.length_regulator(
+                S_ori, ylens=target2_lengths, n_quantizers=3, f0=F0_ori
+            )
+
+            hop_length = 512 if f0_condition else 256
+            max_context_window = sr // hop_length * 30
+            overlap_frame_len = 16
+            overlap_wave_len = overlap_frame_len * hop_length
+
+            max_source_window = max_context_window - mel2.size(2)
+            processed_frames = 0
+            generated_wave_chunks = []
+
+            fp16 = args.fp16
+            while processed_frames < cond.size(1):
+                chunk_cond = cond[:, processed_frames : processed_frames + max_source_window]
+                is_last_chunk = processed_frames + max_source_window >= cond.size(1)
+                cat_condition = torch.cat([prompt_condition, chunk_cond], dim=1)
+                with torch.autocast(
+                    device_type=device.type, dtype=torch.float16 if fp16 else torch.float32
+                ):
+                    vc_target = model.cfm.inference(
+                        cat_condition,
+                        torch.LongTensor([cat_condition.size(1)]).to(mel2.device),
+                        mel2,
+                        style2,
+                        None,
+                        25,  # diffusion_steps
+                        inference_cfg_rate=0.7,
+                    )
+                    vc_target = vc_target[:, :, mel2.size(-1) :]
+                vc_wave = vocoder_fn(vc_target.float()).squeeze()
+                vc_wave = vc_wave[None, :]
+                if processed_frames == 0:
+                    if is_last_chunk:
+                        output_wave = vc_wave[0].cpu().numpy()
+                        generated_wave_chunks.append(output_wave)
+                        break
+                    output_wave = vc_wave[0, :-overlap_wave_len].cpu().numpy()
+                    generated_wave_chunks.append(output_wave)
+                    previous_chunk = vc_wave[0, -overlap_wave_len:]
+                    processed_frames += vc_target.size(2) - overlap_frame_len
+                elif is_last_chunk:
+                    output_wave = crossfade(
+                        previous_chunk.cpu().numpy(), vc_wave[0].cpu().numpy(), overlap_wave_len
+                    )
+                    generated_wave_chunks.append(output_wave)
+                    processed_frames += vc_target.size(2) - overlap_frame_len
+                    break
+                else:
+                    output_wave = crossfade(
+                        previous_chunk.cpu().numpy(),
+                        vc_wave[0, :-overlap_wave_len].cpu().numpy(),
+                        overlap_wave_len,
+                    )
+                    generated_wave_chunks.append(output_wave)
+                    previous_chunk = vc_wave[0, -overlap_wave_len:]
+                    processed_frames += vc_target.size(2) - overlap_frame_len
+
+            vc_wave = torch.tensor(np.concatenate(generated_wave_chunks))[None, :].float()
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            torchaudio.save(str(output_path), vc_wave.cpu(), sr)
 
     def _get_embeddings(self, clips):
         """Calculate speaker embeddings for a list of AudioSegments."""
@@ -360,11 +561,57 @@ class BaseSynthesizer:
         if not centroids:
             return segments
 
+        # Identify duplicate speakers whose centroids are extremely close (< 0.38 cosine distance)
+        from scipy.spatial.distance import cosine
+
+        speaker_map = {spk: spk for spk in centroids}
+        spk_list = list(centroids.keys())
+        for idx1 in range(len(spk_list)):
+            for idx2 in range(idx1 + 1, len(spk_list)):
+                s1 = spk_list[idx1]
+                s2 = spk_list[idx2]
+                if s1 in centroids and s2 in centroids:
+                    dist = cosine(centroids[s1], centroids[s2])
+                    if dist < 0.38:
+                        logger.info(
+                            f"Acoustic Verification: Merging duplicate speakers {s1} and {s2} "
+                            f"(distance: {dist:.3f})"
+                        )
+                        # Resolve transitive mapping: find canonical s1
+                        canonical_s1 = s1
+                        while speaker_map[canonical_s1] != canonical_s1:
+                            canonical_s1 = speaker_map[canonical_s1]
+                        speaker_map[s2] = canonical_s1
+
+        # Consolidate centroids for merged speakers
+        new_centroids = {}
+        for spk, centroid in centroids.items():
+            curr = spk
+            while curr in speaker_map and speaker_map[curr] != curr:
+                curr = speaker_map[curr]
+            mapped_spk = curr
+            if mapped_spk not in new_centroids:
+                new_centroids[mapped_spk] = []
+            new_centroids[mapped_spk].append(centroid)
+
+        centroids = {spk: np.mean(embs, axis=0) for spk, embs in new_centroids.items()}
+
+        def get_canonical(spk):
+            if not spk:
+                return spk
+            curr = spk
+            while curr in speaker_map and speaker_map[curr] != curr:
+                curr = speaker_map[curr]
+            return curr
+
+        # Map initial speaker labels in segments
+        for seg in segments:
+            if seg.get("speaker"):
+                seg["speaker"] = get_canonical(seg["speaker"])
+
         # 2. Re-verify every segment
         audio = AudioSegment.from_wav(audio_path)
         refined_count = 0
-
-        from scipy.spatial.distance import cosine
 
         for seg in segments:
             start_ms = int(seg["start"] * 1000)

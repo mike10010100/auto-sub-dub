@@ -30,6 +30,45 @@ from src.translator import Translator
 from src.utils import get_device
 
 
+def sanitize_transcript_speakers(transcript):
+    """
+    Sanitizes speaker names in transcript segments to prevent invalid/hallucinated
+    names (e.g. SPEAKER_02_AND_01_MIXED) from confusing the pipeline.
+    Returns True if any changes were made, False otherwise.
+    """
+    import re
+
+    changed = False
+
+    def sanitize_speaker(name):
+        if not name or not isinstance(name, str):
+            return name
+        match = re.search(r"SPEAKER_\d+", name)
+        if match:
+            cleaned = match.group(0)
+            if cleaned != name:
+                return cleaned
+        return name
+
+    # Sanitize raw segments
+    for seg in transcript.get("segments", []):
+        old_spk = seg.get("speaker")
+        new_spk = sanitize_speaker(old_spk)
+        if old_spk != new_spk:
+            seg["speaker"] = new_spk
+            changed = True
+
+    # Sanitize translated segments
+    for seg in transcript.get("translated_segments", []):
+        old_spk = seg.get("speaker")
+        new_spk = sanitize_speaker(old_spk)
+        if old_spk != new_spk:
+            seg["speaker"] = new_spk
+            changed = True
+
+    return changed
+
+
 def main(
     video_path,
     target_lang="Spanish",
@@ -169,6 +208,28 @@ def main(
         translated_segments = transcript["translated_segments"]
 
     # 5. Extract Speaker References
+    if sanitize_transcript_speakers(transcript):
+        logger.info(
+            "Detected invalid/mixed speaker names in loaded transcript. Sanitizing and invalidating cache..."
+        )
+        transcriber.save_transcript(transcript, transcript_path)
+        if translated_transcript_path.exists():
+            transcriber.save_transcript(transcript, translated_transcript_path)
+
+        import shutil
+
+        ref_dir = project_dir / "references"
+        if ref_dir.exists():
+            logger.info(f"Removing old references directory to force clean extraction: {ref_dir}")
+            shutil.rmtree(ref_dir)
+        audio_seg_dir = project_dir / "audio_segments"
+        if audio_seg_dir.exists():
+            logger.info(
+                f"Removing old audio segments directory to force clean synthesis: {audio_seg_dir}"
+            )
+            shutil.rmtree(audio_seg_dir)
+        audio_seg_dir.mkdir(parents=True, exist_ok=True)
+
     update_progress("Step 5: Extracting high-quality voice samples for cloning...")
     synthesizer.ref_audio_dir = project_dir / "references"
     synthesizer.ref_audio_dir.mkdir(parents=True, exist_ok=True)
