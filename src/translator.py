@@ -175,9 +175,10 @@ class Translator:
                 ],
                 options={
                     "temperature": 0.2,
-                    "num_predict": 16,
+                    "num_predict": 32,
                     "num_ctx": 8192,  # audio embeddings OOM above this
                 },
+                think=False,
             )
             tag = resp["message"]["content"].strip().upper()
             # Tolerate models that wrap or add prose.
@@ -302,6 +303,7 @@ class Translator:
             f"Emotion: {emotion}. Target duration: {duration:.2f}s. "
             f"Budget: {budget} {unit}. Translate line: '{original_text}'"
         )
+        # First attempt: Try with thinking enabled but a reasonably high token limit (4096)
         resp = self._chat_with_retry(
             model=self.model,
             messages=[
@@ -313,10 +315,32 @@ class Translator:
                 "top_p": 0.95,
                 "top_k": 64,
                 "num_ctx": self.num_ctx,
-                "num_predict": 512,
+                "num_predict": 4096,
             },
         )
         raw_content = resp["message"]["content"].strip()
+
+        # Fallback attempt: If content is empty (model hit token limit during thinking), retry with think=False
+        if not raw_content:
+            logger.info(
+                "Translation first attempt returned empty (truncated reasoning). Retrying with think=False..."
+            )
+            resp = self._chat_with_retry(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_msg},
+                ],
+                options={
+                    "temperature": 1.0,
+                    "top_p": 0.95,
+                    "top_k": 64,
+                    "num_ctx": self.num_ctx,
+                    "num_predict": 1024,
+                },
+                think=False,
+            )
+            raw_content = resp["message"]["content"].strip()
         content = raw_content
         if "<channel|>" in content:
             content = content.split("<channel|>")[-1].strip()
@@ -449,6 +473,7 @@ class Translator:
             )
 
             try:
+                # First attempt: Try with thinking enabled (limit of 4096 tokens)
                 resp = self._chat_with_retry(
                     model=self.model,
                     messages=[
@@ -459,11 +484,31 @@ class Translator:
                         "temperature": 0.2,
                         "top_p": 0.95,
                         "num_ctx": self.num_ctx,
-                        "num_predict": 1024,
+                        "num_predict": 8192,
                     },
                 )
-
                 raw_content = resp["message"]["content"].strip()
+
+                # Fallback attempt: If content is empty, retry with think=False
+                if not raw_content:
+                    logger.info(
+                        "Diarization review first attempt returned empty (truncated reasoning). Retrying with think=False..."
+                    )
+                    resp = self._chat_with_retry(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": f"TRANSCRIPT CHUNK:\n{context_block}"},
+                        ],
+                        options={
+                            "temperature": 0.2,
+                            "top_p": 0.95,
+                            "num_ctx": self.num_ctx,
+                            "num_predict": 4096,
+                        },
+                        think=False,
+                    )
+                    raw_content = resp["message"]["content"].strip()
                 content = raw_content
                 if "<channel|>" in content:
                     content = content.split("<channel|>")[-1].strip()

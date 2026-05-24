@@ -137,3 +137,59 @@ def test_valid_emotions_set_nonempty():
 def test_words_per_second_has_major_languages():
     for lang in ("English", "Spanish", "French", "German"):
         assert lang in WORDS_PER_SECOND
+
+
+def test_translate_once_fallback():
+    from unittest.mock import MagicMock
+
+    translator = Translator(ollama_url="http://localhost:11434")
+
+    # Mock response format:
+    # First response: empty content (truncated reasoning)
+    resp1 = {"message": {"content": ""}}
+    # Second response: fallback content
+    resp2 = {"message": {"content": '{"translated_text": "Hello", "is_song": false}'}}
+
+    translator._chat_with_retry = MagicMock(side_effect=[resp1, resp2])
+
+    res, is_song = translator._translate_once(
+        original_text="こんにちは",
+        emotion="[NEUTRAL]",
+        duration=5.0,
+        target_lang="English",
+        budget=10,
+    )
+
+    assert res == "Hello"
+    assert is_song is False
+    assert translator._chat_with_retry.call_count == 2
+
+    # Check that the second call used think=False
+    args, kwargs = translator._chat_with_retry.call_args_list[1]
+    assert kwargs.get("think") is False
+
+
+def test_review_diarization_fallback():
+    from unittest.mock import MagicMock
+
+    translator = Translator(ollama_url="http://localhost:11434")
+
+    # First response: empty content
+    resp1 = {"message": {"content": ""}}
+    # Second response: fallback corrections JSON
+    resp2 = {
+        "message": {
+            "content": '<reasoning>ok</reasoning>```json\n{"corrections": [{"index": 0, "new_speaker": "SPEAKER_02"}]}\n```'
+        }
+    }
+
+    translator._chat_with_retry = MagicMock(side_effect=[resp1, resp2])
+
+    segments = [{"text": "Hello", "speaker": "SPEAKER_01"}]
+    reviewed = translator.review_diarization(segments)
+
+    assert reviewed[0]["speaker"] == "SPEAKER_02"
+    assert translator._chat_with_retry.call_count == 2
+
+    args, kwargs = translator._chat_with_retry.call_args_list[1]
+    assert kwargs.get("think") is False

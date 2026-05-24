@@ -365,31 +365,35 @@ def main(
                 "-map",
                 "0:v",  # Map original video
                 "-map",
-                "0:a",  # Map original audio (Track 1)
+                "1:a",  # Map dubbed audio as Track 1 (a:0)
                 "-map",
-                "1:a",  # Map dubbed audio (Track 2)
+                "0:a",  # Map original audio as Track 2 (a:1)
                 "-map",
                 "0:s?",  # Map all original subtitles (optional match)
                 "-c:v",
                 "copy",
                 "-c:a:0",
-                "copy",  # Keep original audio as-is
-                "-c:a:1",
                 audio_codec,  # Encode dubbed audio
+                "-c:a:1",
+                "copy",  # Keep original audio as-is
                 "-c:s",
                 subtitle_codec,  # Use compatible subtitle codec
                 "-metadata:s:a:0",
-                f"language={src_iso}",
-                "-metadata:s:a:0",
-                "title=Original",
-                "-metadata:s:a:1",
                 f"language={tgt_iso}",
-                "-metadata:s:a:1",
+                "-metadata:s:a:0",
+                "handler_name=Dubbed",
+                "-metadata:s:a:0",
                 "title=Dubbed",
+                "-metadata:s:a:1",
+                f"language={src_iso}",
+                "-metadata:s:a:1",
+                "handler_name=Original",
+                "-metadata:s:a:1",
+                "title=Original",
                 "-disposition:a:0",
-                "0",  # Original is NOT default
-                "-disposition:a:1",
                 "default",  # Dub is default
+                "-disposition:a:1",
+                "0",  # Original is NOT default
                 "-shortest",
                 str(video_output_path),
             ],
