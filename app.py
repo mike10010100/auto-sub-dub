@@ -114,6 +114,12 @@ with st.sidebar:
             "Max Speakers", min_value=1, value=10, step=1, help="Limit maximum number of speakers"
         )
 
+    semantic_review = st.checkbox(
+        "Enable Semantic Diarization Review",
+        value=False,
+        help="Use Gemma 4 to logically review turn-taking. Disabled by default to prevent reference contamination.",
+    )
+
     st.divider()
     st.subheader("Synthesis Quality (Fish Only)")
     tts_temp = st.slider(
@@ -181,6 +187,7 @@ if uploaded_file is not None:
                     max_speakers=int(max_speakers),
                     tts_temp=float(tts_temp),
                     tts_top_p=float(tts_top_p),
+                    semantic_review=semantic_review,
                     progress_callback=progress_cb,
                 )
 

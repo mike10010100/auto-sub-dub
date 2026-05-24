@@ -79,6 +79,7 @@ def main(
     ollama_audio_model=None,
     engine="xtts",
     progress_callback=None,
+    semantic_review=False,
     **kwargs,
 ):  # pragma: no cover
     def update_progress(msg):
@@ -142,9 +143,10 @@ def main(
             max_speakers=kwargs.get("max_speakers"),
         )
 
-        update_progress("Step 3b: Reviewing diarization for logical consistency (Gemma 4)...")
-        # Semantic Diarization Review (LLM Logic Pass)
-        transcript["segments"] = translator.review_diarization(transcript["segments"])
+        if semantic_review:
+            update_progress("Step 3b: Reviewing diarization for logical consistency (Gemma 4)...")
+            # Semantic Diarization Review (LLM Logic Pass)
+            transcript["segments"] = translator.review_diarization(transcript["segments"])
 
         transcriber.save_transcript(transcript, transcript_path)
 
@@ -492,6 +494,11 @@ if __name__ == "__main__":
     parser.add_argument("--max_speakers", type=int, help="Maximum number of speakers")
     parser.add_argument("--tts_temp", type=float, default=0.7, help="TTS Temperature (0.1-1.0)")
     parser.add_argument("--tts_top_p", type=float, default=0.8, help="TTS Top-P sampling")
+    parser.add_argument(
+        "--semantic-review",
+        action="store_true",
+        help="Enable LLM-based semantic diarization review (disabled by default)",
+    )
 
     args = parser.parse_args()
     main(
@@ -507,4 +514,5 @@ if __name__ == "__main__":
         max_speakers=args.max_speakers,
         tts_temp=args.tts_temp,
         tts_top_p=args.tts_top_p,
+        semantic_review=args.semantic_review,
     )
