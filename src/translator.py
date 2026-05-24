@@ -303,7 +303,7 @@ class Translator:
             f"Emotion: {emotion}. Target duration: {duration:.2f}s. "
             f"Budget: {budget} {unit}. Translate line: '{original_text}'"
         )
-        # First attempt: Try with thinking enabled but a reasonably high token limit (4096)
+        # First attempt: Try with thinking enabled but a reasonably high token limit (1024)
         resp = self._chat_with_retry(
             model=self.model,
             messages=[
@@ -315,7 +315,7 @@ class Translator:
                 "top_p": 0.95,
                 "top_k": 64,
                 "num_ctx": self.num_ctx,
-                "num_predict": 4096,
+                "num_predict": 1024,
             },
         )
         raw_content = resp["message"]["content"].strip()
