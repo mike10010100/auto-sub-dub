@@ -684,18 +684,23 @@ class BaseSynthesizer:
                     best_spk = spk
 
             # 5. Flip condition logic:
-            # - Reject flips if the closest match is itself a poor match (min_dist >= 0.48)
+            # - Reject flips if the closest match is itself a poor match (min_dist >= 0.48),
+            #   unless the current speaker is an extremely poor match (curr_dist >= 0.65) and the improvement is substantial (> 0.20)
             # - Only flip if we are MUCH more certain about another speaker
             # (threshold: 0.15 gap or original was very far > 0.45 with an improvement of at least 0.08)
             curr_dist = distances.get(curr_spk, 1.0)
-            if (
-                best_spk != curr_spk
-                and min_dist < 0.48
-                and (
-                    (curr_dist - min_dist) > 0.15
-                    or (curr_dist > 0.45 and (curr_dist - min_dist) > 0.08)
+            allow_flip = False
+            if best_spk != curr_spk:
+                is_significant_improvement = (curr_dist - min_dist) > 0.15 or (
+                    curr_dist > 0.45 and (curr_dist - min_dist) > 0.08
                 )
-            ):
+                if is_significant_improvement and (
+                    (min_dist < 0.48)
+                    or (min_dist < 0.58 and curr_dist >= 0.65 and (curr_dist - min_dist) > 0.20)
+                ):
+                    allow_flip = True
+
+            if allow_flip:
                 logger.info(
                     f"  Re-assigned segment {seg.get('start', 0):.1f}s: "
                     f"{curr_spk} ({curr_dist:.2f}) -> {best_spk} ({min_dist:.2f})"
