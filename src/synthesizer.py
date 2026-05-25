@@ -538,32 +538,77 @@ class BaseSynthesizer:
         """
         logger.info("Starting Diarization Refinement (Second Pass)...")
 
-        # 1. Get purified centroids for every known speaker
-        index_path = self.ref_audio_dir / "references.json"
-        if not index_path.exists():
-            return segments
+        audio = AudioSegment.from_wav(audio_path)
 
-        try:
-            refs = json.loads(index_path.read_text(encoding="utf-8"))
-        except Exception:
-            return segments
+        # 1. Group segments by speaker
+        speaker_segments = {}
+        for seg in segments:
+            spk = seg.get("speaker")
+            if spk:
+                if spk not in speaker_segments:
+                    speaker_segments[spk] = []
+                speaker_segments[spk].append(seg)
 
         import numpy as np
+        from scipy.spatial.distance import cdist, cosine
 
+        # 2. Extract purified centroids for each speaker directly from segment audio
         centroids = {}
-        for spk, clips in refs.items():
-            # Load embeddings for the finalized reference clips
-            clip_segments = [AudioSegment.from_wav(c["path"]) for c in clips]
-            embs = self._get_embeddings(clip_segments)
-            if embs is not None:
-                centroids[spk] = np.mean(embs, axis=0)
+        for spk, spk_segs in speaker_segments.items():
+            # Filter for segments with reasonable duration
+            candidates = [s for s in spk_segs if (s.get("end", 0) - s.get("start", 0)) >= 1.5]
+            if len(candidates) < 2:
+                # Fallback to shorter segments if needed
+                candidates = [s for s in spk_segs if (s.get("end", 0) - s.get("start", 0)) >= 0.5]
+
+            # Sort candidates by duration descending, take top 15
+            candidates.sort(key=lambda s: s.get("end", 0) - s.get("start", 0), reverse=True)
+            candidates = candidates[:15]
+
+            if not candidates:
+                continue
+
+            # Load audio clips and compute embeddings
+            clips = []
+            for seg in candidates:
+                start_ms = int(seg.get("start", 0) * 1000)
+                end_ms = int(seg.get("end", 0) * 1000)
+                clip = audio[start_ms:end_ms]
+                # Skip silent clips
+                if clip.dBFS <= -45:
+                    continue
+                clips.append(clip)
+
+            if not clips:
+                continue
+
+            embs = self._get_embeddings(clips)
+            if embs is None:
+                continue
+
+            # Purify embeddings using consensus check
+            if len(embs) >= 2:
+                dist_matrix = cdist(embs, embs, metric="cosine")
+                avg_distances = np.mean(dist_matrix, axis=1)
+                anchor_idx = np.argmin(avg_distances)
+
+                purified_embs = []
+                for idx, emb in enumerate(embs):
+                    dist = dist_matrix[anchor_idx, idx]
+                    if dist <= 0.35:
+                        purified_embs.append(emb)
+
+                if purified_embs:
+                    centroids[spk] = np.mean(purified_embs, axis=0)
+                else:
+                    centroids[spk] = np.mean(embs, axis=0)
+            else:
+                centroids[spk] = embs[0]
 
         if not centroids:
             return segments
 
-        # Identify duplicate speakers whose centroids are extremely close (< 0.38 cosine distance)
-        from scipy.spatial.distance import cosine
-
+        # 3. Identify duplicate speakers whose centroids are extremely close (< 0.38 cosine distance)
         speaker_map = {spk: spk for spk in centroids}
         spk_list = list(centroids.keys())
         for idx1 in range(len(spk_list)):
@@ -609,8 +654,7 @@ class BaseSynthesizer:
             if seg.get("speaker"):
                 seg["speaker"] = get_canonical(seg["speaker"])
 
-        # 2. Re-verify every segment
-        audio = AudioSegment.from_wav(audio_path)
+        # 4. Re-verify every segment
         refined_count = 0
 
         for seg in segments:
@@ -639,10 +683,19 @@ class BaseSynthesizer:
                     min_dist = dist
                     best_spk = spk
 
-            # 3. Only flip if we are MUCH more certain about another speaker
-            # (threshold: 0.15 gap or original was very far > 0.45)
+            # 5. Flip condition logic:
+            # - Reject flips if the closest match is itself a poor match (min_dist >= 0.48)
+            # - Only flip if we are MUCH more certain about another speaker
+            # (threshold: 0.15 gap or original was very far > 0.45 with an improvement of at least 0.08)
             curr_dist = distances.get(curr_spk, 1.0)
-            if best_spk != curr_spk and ((curr_dist - min_dist) > 0.15 or curr_dist > 0.45):
+            if (
+                best_spk != curr_spk
+                and min_dist < 0.48
+                and (
+                    (curr_dist - min_dist) > 0.15
+                    or (curr_dist > 0.45 and (curr_dist - min_dist) > 0.08)
+                )
+            ):
                 logger.info(
                     f"  Re-assigned segment {seg.get('start', 0):.1f}s: "
                     f"{curr_spk} ({curr_dist:.2f}) -> {best_spk} ({min_dist:.2f})"
@@ -800,11 +853,21 @@ class FishSynthesizer(BaseSynthesizer):
 
         self.model_path = model_path
         self.tokenizer_path = tokenizer_path
+        self._server_process = None
 
         if not self.s2_cpp_path:
             logger.error("s2.cpp binary not found in expected locations.")
         else:
             logger.info(f"Using Fish Speech binary: {self.s2_cpp_path}")
+
+    def __del__(self):
+        if getattr(self, "_server_process", None):
+            try:
+                logger.info("Stopping Fish Speech background server...")
+                self._server_process.terminate()
+                self._server_process.wait(timeout=2.0)
+            except Exception:
+                pass
 
     def synthesize(
         self,
@@ -828,6 +891,84 @@ class FishSynthesizer(BaseSynthesizer):
         # Format the text with emotion tags for Fish Speech
         formatted_text = f"{emotion} {text}" if emotion and emotion.startswith("[") else text
 
+        import json
+        import time
+
+        import requests
+
+        url = "http://127.0.0.1:3030/generate"
+        server_ready = False
+
+        # Try to contact server
+        try:
+            resp = requests.post(url, data={"text": ""}, timeout=1.0)
+            if resp.status_code in [200, 400]:
+                server_ready = True
+        except requests.exceptions.RequestException:
+            pass
+
+        if not server_ready:
+            logger.info("Fish Speech server not running. Starting background server...")
+            server_cmd = [
+                self.s2_cpp_path,
+                "--server",
+                "-m",
+                self.model_path,
+                "-t",
+                self.tokenizer_path,
+            ]
+            if self.device == "cuda":
+                server_cmd.extend(["-c", "0"])
+            elif self.device == "mps":
+                server_cmd.append("-M")
+
+            # Start background server
+            self._server_process = subprocess.Popen(
+                server_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            # Wait for it to become ready (up to 90 seconds)
+            for attempt in range(90):
+                time.sleep(1.0)
+                try:
+                    resp = requests.post(url, data={"text": ""}, timeout=1.0)
+                    if resp.status_code in [200, 400]:
+                        logger.info("Fish Speech server is ready!")
+                        server_ready = True
+                        break
+                except requests.exceptions.RequestException:
+                    pass
+
+            if not server_ready:
+                logger.error("Failed to start Fish Speech server. Falling back to CLI mode...")
+
+        if server_ready:
+            logger.info(f"Synthesizing with Fish Speech server: {formatted_text}")
+            try:
+                params = {
+                    "temperature": temp,
+                    "top_p": top_p,
+                    "top_k": top_k,
+                }
+                files = {
+                    "text": (None, formatted_text),
+                    "params": (None, json.dumps(params)),
+                }
+                resp = requests.post(url, files=files, timeout=120.0)
+                if resp.status_code == 200:
+                    output_path.write_bytes(resp.content)
+                    return output_path
+                else:
+                    logger.error(
+                        f"Server synthesis failed (status {resp.status_code}): {resp.text}"
+                    )
+            except Exception as e:
+                logger.error(f"Server synthesis request failed: {e}")
+
+        # Fallback to CLI mode
+        logger.info(f"Synthesizing with Fish Speech (CLI fallback): {formatted_text}")
         cmd = [
             self.s2_cpp_path,
             "-m",
@@ -856,7 +997,6 @@ class FishSynthesizer(BaseSynthesizer):
         elif self.device == "mps":
             cmd.append("-M")
 
-        logger.info(f"Synthesizing with Fish Speech: {formatted_text}")
         try:
             subprocess.run(cmd, check=True, capture_output=True)
             return output_path

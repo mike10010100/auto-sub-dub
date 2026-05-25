@@ -234,6 +234,33 @@ def main(
             shutil.rmtree(audio_seg_dir)
         audio_seg_dir.mkdir(parents=True, exist_ok=True)
 
+    # --- Verification Cycle: Diarization Refinement ---
+    update_progress("Step 5b: Re-verifying speaker assignments (Acoustic Verification)...")
+    # Use the purified speaker centroids directly from vocal boundaries to fix any mislabeled segments
+    # before we extract references.
+    translated_segments = synthesizer.refine_speaker_assignments(vocals, translated_segments)
+
+    # Sync the refined speaker labels from translated_segments back to raw transcript["segments"]
+    # (so that references are extracted based on refined speakers!)
+    for i, trans_seg in enumerate(translated_segments):
+        if i < len(transcript.get("segments", [])):
+            raw_seg = transcript["segments"][i]
+            # Ensure the segments correspond (safety check)
+            if abs(raw_seg.get("start", 0) - trans_seg.get("start", 0)) < 0.1:
+                raw_seg["speaker"] = trans_seg.get("speaker")
+            else:
+                # Find matching segment by start time if index-based zip fails
+                for rs in transcript.get("segments", []):
+                    if abs(rs.get("start", 0) - trans_seg.get("start", 0)) < 0.1:
+                        rs["speaker"] = trans_seg.get("speaker")
+                        break
+
+    # Save the refined transcripts back to cache so future runs/steps don't lose the refinement
+    transcriber.save_transcript(transcript, transcript_path)
+    if translated_transcript_path.exists():
+        transcriber.save_transcript(transcript, translated_transcript_path)
+
+    # 5. Extract Speaker References
     update_progress("Step 5: Extracting high-quality voice samples for cloning...")
     synthesizer.ref_audio_dir = project_dir / "references"
     synthesizer.ref_audio_dir.mkdir(parents=True, exist_ok=True)
@@ -241,12 +268,6 @@ def main(
     references = synthesizer.extract_speaker_references(
         vocals, transcript, target_clips=5, min_duration=5
     )
-
-    # --- Verification Cycle: Diarization Refinement ---
-    update_progress("Step 5b: Re-verifying speaker assignments (Acoustic Verification)...")
-    # Use the purified speaker centroids to fix any mislabeled segments
-    # before we start the expensive synthesis phase.
-    translated_segments = synthesizer.refine_speaker_assignments(vocals, translated_segments)
 
     # 6. Synthesize & Place Audio
     update_progress(f"Step 6: Synthesizing dubbed audio segments ({engine})...")
