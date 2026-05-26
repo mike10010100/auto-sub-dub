@@ -197,3 +197,134 @@ def test_review_diarization_fallback():
 
     args, kwargs = translator._chat_with_retry.call_args_list[1]
     assert kwargs.get("think") is False
+
+
+def test_split_segment_by_text_with_words():
+    from src.translator import split_segment_by_text
+
+    segment = {
+        "start": 0.0,
+        "end": 10.0,
+        "text": "Hello world this is a test",
+        "speaker": "SPEAKER_01",
+        "words": [
+            {"word": "Hello", "start": 0.0, "end": 2.0},
+            {"word": "world", "start": 2.0, "end": 4.0},
+            {"word": "this", "start": 4.0, "end": 6.0},
+            {"word": "is", "start": 6.0, "end": 7.0},
+            {"word": "a", "start": 7.0, "end": 8.0},
+            {"word": "test", "start": 8.0, "end": 10.0},
+        ],
+    }
+
+    split_texts = ["Hello world", "this is a test"]
+    sub_segs = split_segment_by_text(segment, split_texts)
+
+    assert len(sub_segs) == 2
+    assert sub_segs[0]["text"] == "Hello world"
+    assert sub_segs[0]["start"] == 0.0
+    assert sub_segs[0]["end"] == 4.0
+    assert sub_segs[0]["speaker"] == "SPEAKER_01"
+
+    assert sub_segs[1]["text"] == "this is a test"
+    assert sub_segs[1]["start"] == 4.0
+    assert sub_segs[1]["end"] == 10.0
+    assert sub_segs[1]["speaker"] == "SPEAKER_01"
+
+
+def test_split_segment_by_text_no_words():
+    from src.translator import split_segment_by_text
+
+    segment = {
+        "start": 0.0,
+        "end": 10.0,
+        "text": "Hello world this is a test",
+        "speaker": "SPEAKER_01",
+    }
+
+    split_texts = ["Hello world", "this is a test"]
+    sub_segs = split_segment_by_text(segment, split_texts)
+
+    assert len(sub_segs) == 2
+    assert sub_segs[0]["start"] == 0.0
+    assert sub_segs[0]["end"] == 5.0
+    assert sub_segs[1]["start"] == 5.0
+    assert sub_segs[1]["end"] == 10.0
+
+
+def test_review_diarization_splits():
+    from unittest.mock import MagicMock
+
+    from src.translator import Translator
+
+    translator = Translator(ollama_url="http://localhost:11434")
+
+    # Mock response containing a correction and a split
+    resp = {
+        "message": {
+            "content": """
+<reasoning>
+Segment 0 is actually SPEAKER_02.
+Segment 1 should be split between SPEAKER_02 and SPEAKER_01.
+</reasoning>
+```json
+{
+  "corrections": [
+    {"index": 0, "new_speaker": "SPEAKER_02"}
+  ],
+  "splits": [
+    {
+      "index": 1,
+      "parts": [
+        {"text": "Hello", "speaker": "SPEAKER_02"},
+        {"text": "world", "speaker": "SPEAKER_01"}
+      ]
+    }
+  ]
+}
+```
+"""
+        }
+    }
+
+    translator._chat_with_retry = MagicMock(return_value=resp)
+
+    # We add SPEAKER_02 to segments so SPEAKER_02 is recognized as a valid speaker,
+    # preventing the warning and speaker override fallback.
+    segments = [
+        {"start": 0.0, "end": 2.0, "text": "Hi", "speaker": "SPEAKER_01"},
+        {
+            "start": 2.0,
+            "end": 6.0,
+            "text": "Hello world",
+            "speaker": "SPEAKER_01",
+            "words": [
+                {"word": "Hello", "start": 2.0, "end": 4.0},
+                {"word": "world", "start": 4.0, "end": 6.0},
+            ],
+        },
+        {"start": 6.0, "end": 8.0, "text": "Bye", "speaker": "SPEAKER_02"},
+    ]
+
+    reviewed = translator.review_diarization(segments)
+
+    # We expect 4 segments:
+    # 1. Corrected segment 0 to SPEAKER_02
+    # 2. Segment 1 split into 2 subsegments (one with speaker SPEAKER_02, other SPEAKER_01)
+    # 3. Segment 2 unchanged (SPEAKER_02)
+    assert len(reviewed) == 4
+    assert reviewed[0]["speaker"] == "SPEAKER_02"
+    assert reviewed[0]["text"] == "Hi"
+
+    assert reviewed[1]["text"] == "Hello"
+    assert reviewed[1]["speaker"] == "SPEAKER_02"
+    assert reviewed[1]["start"] == 2.0
+    assert reviewed[1]["end"] == 4.0
+
+    assert reviewed[2]["text"] == "world"
+    assert reviewed[2]["speaker"] == "SPEAKER_01"
+    assert reviewed[2]["start"] == 4.0
+    assert reviewed[2]["end"] == 6.0
+
+    assert reviewed[3]["text"] == "Bye"
+    assert reviewed[3]["speaker"] == "SPEAKER_02"

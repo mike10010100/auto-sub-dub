@@ -93,6 +93,92 @@ def _count_syllables(text, language):
     return count
 
 
+def split_segment_by_text(segment, split_texts):
+    """
+    Splits a segment into multiple sub-segments based on a list of split texts.
+    Maps words to sub-segments sequentially by character matching.
+    """
+    words = segment.get("words", [])
+    if not words:
+        # If no word-level timestamps, we cannot split accurately. Just distribute duration.
+        num_splits = len(split_texts)
+        total_dur = segment["end"] - segment["start"]
+        dur_per_split = total_dur / num_splits
+        sub_segs = []
+        for i, text in enumerate(split_texts):
+            sub_segs.append(
+                {
+                    "start": segment["start"] + i * dur_per_split,
+                    "end": segment["start"] + (i + 1) * dur_per_split,
+                    "text": text,
+                    "speaker": segment.get("speaker"),
+                }
+            )
+        return sub_segs
+
+    sub_segs = []
+    word_idx = 0
+
+    # Helper to clean text for matching (remove punctuation, spaces, etc.)
+    def clean(t):
+        return "".join(c for c in t if c.isalnum())
+
+    for text in split_texts:
+        cleaned_text = clean(text)
+        if not cleaned_text:
+            continue
+
+        split_words = []
+        accumulated_chars = ""
+
+        # Consume words until we match the split text length/characters
+        is_last = text == split_texts[-1]
+        while word_idx < len(words) and (is_last or len(accumulated_chars) < len(cleaned_text)):
+            w = words[word_idx]
+            word_idx += 1
+            split_words.append(w)
+            accumulated_chars += clean(w.get("word", ""))
+
+        if not split_words:
+            continue
+
+        # Get start/end from word timestamps
+        # WhisperX sometimes doesn't have start/end for punctuation, so find first/last with timestamps
+        valid_starts = [w["start"] for w in split_words if "start" in w]
+        valid_ends = [w["end"] for w in split_words if "end" in w]
+
+        start = valid_starts[0] if valid_starts else segment["start"]
+        end = valid_ends[-1] if valid_ends else segment["end"]
+
+        sub_segs.append(
+            {
+                "start": start,
+                "end": end,
+                "text": text,
+                "words": split_words,
+                "speaker": segment.get("speaker"),  # Default to parent speaker
+            }
+        )
+
+    # Adjust timings to prevent gaps or overlaps between sub-segments
+    for i in range(len(sub_segs) - 1):
+        curr_seg = sub_segs[i]
+        next_seg = sub_segs[i + 1]
+        mid = (curr_seg["end"] + next_seg["start"]) / 2
+        curr_seg["end"] = mid
+        next_seg["start"] = mid
+
+    # Ensure boundaries match parent segment
+    if sub_segs:
+        sub_segs[0]["start"] = segment["start"]
+        sub_segs[-1]["end"] = segment["end"]
+
+    if not sub_segs:
+        return [segment]
+
+    return sub_segs
+
+
 class Translator:
     """
     Two-model pipeline:
@@ -443,7 +529,8 @@ class Translator:
     def review_diarization(self, segments):  # pragma: no cover
         """
         Use the LLM to review conversational flow and logically correct
-        speaker diarization mistakes (e.g., merging overlapping characters).
+        speaker diarization mistakes (e.g., merging overlapping characters)
+        as well as splitting composite segments containing multiple speakers.
         """
         if not segments:
             return segments
@@ -454,10 +541,12 @@ class Translator:
         logger.info(f"Valid speakers for diarization review: {', '.join(valid_speakers)}")
 
         chunk_size = 25
-        out_segments = [s.copy() for s in segments]
+        # We will collect corrections and splits globally to avoid shifting indices during chunk loop
+        all_corrections = {}
+        all_splits = {}
 
-        for i in tqdm(range(0, len(out_segments), chunk_size), desc="Semantic Review"):
-            chunk = out_segments[i : i + chunk_size]
+        for i in tqdm(range(0, len(segments), chunk_size), desc="Semantic Review"):
+            chunk = segments[i : i + chunk_size]
 
             # Format the chunk
             lines = []
@@ -470,20 +559,37 @@ class Translator:
 
             system_prompt = (
                 "You are a logic analyzer. Review the following dialogue transcript. "
-                "The acoustic diarization AI often misidentifies speakers when their voices are similar or overlapping. "
-                "Look for logical breaks in conversational flow (e.g., a person answering their own question, "
-                "or a sudden shift in tone/topic attributed to the same speaker). "
-                f"You MUST ONLY choose speaker labels from this list of valid speakers: {', '.join(valid_speakers)}. "
-                "Do NOT invent new speaker labels, do NOT merge speaker labels (e.g., SPEAKER_01_AND_02), "
-                "and do NOT use any speaker label not in the valid list. "
-                "You MUST respond in two parts. First, write a brief <reasoning> block explaining the flow of the conversation and checking for errors. "
-                "Second, output a JSON object containing an array of corrections. "
-                "If corrections are needed, return:\n"
-                "<reasoning>\nSpeaker 1 asks a question, but Speaker 1 is also labeled as answering it. This is a logical error. Speaker 2 should be the answerer.\n</reasoning>\n"
-                '```json\n{"corrections": [{"index": 12, "new_speaker": "SPEAKER_02"}]}\n```\n'
-                "If NO corrections are needed, return:\n"
-                "<reasoning>\nThe conversation flows logically. No single speaker answers their own questions or shifts topics abruptly.\n</reasoning>\n"
-                '```json\n{"corrections": []}\n```'
+                "The acoustic diarization AI often misidentifies speakers or merges different speakers' dialogue "
+                "into a single segment (composite segments).\n"
+                "Review the conversational flow and identify:\n"
+                "1. Segment speaker corrections (e.g., if an entire segment is mislabeled).\n"
+                "2. Segment splits: if a single segment contains dialogue from multiple speakers (e.g., a question and an answer, or two characters calling each other's names), split the text into distinct parts, and assign the correct speaker to each part.\n\n"
+                f"You MUST ONLY choose speaker labels from this list of valid speakers: {', '.join(valid_speakers)}.\n"
+                "Do NOT invent new speaker labels.\n"
+                "You MUST respond in two parts. First, write a brief <reasoning> block explaining the flow. "
+                "Second, output a JSON object containing both 'corrections' and 'splits'.\n\n"
+                "Example response structure:\n"
+                "<reasoning>\n"
+                "Segment 70 contains dialogue from both SPEAKER_03 and SPEAKER_04. It should be split.\n"
+                "Segment 12 is speaker SPEAKER_04, but is labeled as SPEAKER_03.\n"
+                "</reasoning>\n"
+                "```json\n"
+                "{\n"
+                '  "corrections": [\n'
+                '    {"index": 12, "new_speaker": "SPEAKER_04"}\n'
+                "  ],\n"
+                '  "splits": [\n'
+                "    {\n"
+                '      "index": 70,\n'
+                '      "parts": [\n'
+                '        {"text": "ひどいよ、前原くん", "speaker": "SPEAKER_03"},\n'
+                '        {"text": "朝乃木さん", "speaker": "SPEAKER_04"},\n'
+                '        {"text": "うん、うん、正解", "speaker": "SPEAKER_03"}\n'
+                "      ]\n"
+                "    }\n"
+                "  ]\n"
+                "}\n"
+                "```"
             )
 
             try:
@@ -533,8 +639,8 @@ class Translator:
                 elif "</think>" in content:
                     content = content.split("</think>")[-1].strip()
 
-                # Robustly extract JSON using regex, looking for the specific structure
-                json_match = re.search(r'\{.*"corrections".*\}', content, re.DOTALL)
+                # Robustly extract JSON using regex, looking for corrections or splits structure
+                json_match = re.search(r'\{.*"(corrections|splits)".*\}', content, re.DOTALL)
                 if json_match:
                     content = json_match.group(0)
                 elif "{" in content and "}" in content:
@@ -550,6 +656,7 @@ class Translator:
                 try:
                     data = json.loads(content)
                     corrections = data.get("corrections", [])
+                    splits = data.get("splits", [])
                 except json.JSONDecodeError as e:
                     logger.warning(
                         f"Semantic Diarization Review failed to parse JSON for chunk {i}: {e}. Raw output: {repr(raw_content[:200])}..."
@@ -563,25 +670,73 @@ class Translator:
                         idx is not None
                         and new_spk
                         and isinstance(idx, int)
-                        and i <= idx < i + chunk_size
+                        and i <= idx < i + len(chunk)
                     ):
                         if new_spk not in valid_speakers:
                             logger.warning(
                                 f"  Semantic Review returned invalid/hallucinated speaker '{new_spk}'. Ignoring."
                             )
                             continue
-                        old_spk = out_segments[idx].get("speaker")
-                        if old_spk != new_spk:
-                            logger.info(
-                                f"  Semantic Review Fixed: Segment {idx} ({old_spk} -> {new_spk})"
-                            )
-                            out_segments[idx]["speaker"] = new_spk
+                        all_corrections[idx] = new_spk
+
+                for split in splits:
+                    idx = split.get("index")
+                    parts = split.get("parts", [])
+                    if (
+                        idx is not None
+                        and parts
+                        and isinstance(idx, int)
+                        and i <= idx < i + len(chunk)
+                    ):
+                        valid_parts = []
+                        for part in parts:
+                            spk = part.get("speaker")
+                            txt = part.get("text", "")
+                            if spk in valid_speakers:
+                                valid_parts.append({"text": txt, "speaker": spk})
+                            else:
+                                logger.warning(
+                                    f"  Semantic Review split part had invalid speaker '{spk}'. Using parent speaker."
+                                )
+                                valid_parts.append(
+                                    {"text": txt, "speaker": segments[idx].get("speaker")}
+                                )
+                        if valid_parts:
+                            all_splits[idx] = valid_parts
 
             except Exception as e:
                 logger.warning(f"Semantic Diarization Review failed for chunk {i}: {e}")
                 continue
 
-        return out_segments
+        # Reconstruct the final list of segments by applying corrections and splits
+        final_segments = []
+        for idx, segment in enumerate(segments):
+            if idx in all_splits:
+                parts = all_splits[idx]
+                split_texts = [p.get("text", "") for p in parts]
+                sub_segs = split_segment_by_text(segment, split_texts)
+                for sub_idx, sub_seg in enumerate(sub_segs):
+                    if sub_idx < len(parts):
+                        spk = parts[sub_idx].get("speaker")
+                        if spk in valid_speakers:
+                            sub_seg["speaker"] = spk
+                final_segments.extend(sub_segs)
+                logger.info(
+                    f"  Semantic Review Split: Segment {idx} split into {len(sub_segs)} parts"
+                )
+            else:
+                new_segment = segment.copy()
+                if idx in all_corrections:
+                    new_spk = all_corrections[idx]
+                    old_spk = new_segment.get("speaker")
+                    if old_spk != new_spk:
+                        logger.info(
+                            f"  Semantic Review Fixed: Segment {idx} ({old_spk} -> {new_spk})"
+                        )
+                        new_segment["speaker"] = new_spk
+                final_segments.append(new_segment)
+
+        return final_segments
 
     def translate_segments_multimodal(  # pragma: no cover  (orchestrates Ollama + audio)
         self,
