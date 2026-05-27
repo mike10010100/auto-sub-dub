@@ -197,7 +197,7 @@ class Translator:
         self.audio_model = audio_model or os.getenv("OLLAMA_AUDIO_MODEL", "gemma4:e4b")
         self.num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
 
-        self.client = Client(host=self.ollama_url)
+        self.client = Client(host=self.ollama_url, timeout=600.0)
         logger.info(
             f"Translator: ollama={self.ollama_url} "
             f"translate={self.model} audio={self.audio_model} ctx={self.num_ctx}"
@@ -540,7 +540,7 @@ class Translator:
         valid_speakers = sorted({s.get("speaker") for s in segments if s.get("speaker")})
         logger.info(f"Valid speakers for diarization review: {', '.join(valid_speakers)}")
 
-        chunk_size = 25
+        chunk_size = 10
         # We will collect corrections and splits globally to avoid shifting indices during chunk loop
         all_corrections = {}
         all_splits = {}
