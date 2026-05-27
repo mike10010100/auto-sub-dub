@@ -148,6 +148,7 @@ def main(
             update_progress("Step 3b: Reviewing diarization for logical consistency (Gemma 4)...")
             # Semantic Diarization Review (LLM Logic Pass)
             transcript["segments"] = translator.review_diarization(transcript["segments"])
+            transcript["semantic_reviewed"] = True
 
         transcriber.save_transcript(transcript, transcript_path)
 
@@ -171,6 +172,24 @@ def main(
         logger.info(f"Skipping transcription, using existing: {transcript_path}")
         with open(transcript_path, encoding="utf-8") as f:
             transcript = json.load(f)
+
+        if semantic_review and not transcript.get("semantic_reviewed"):
+            update_progress("Step 3b: Reviewing diarization for logical consistency (Gemma 4)...")
+            transcript["segments"] = translator.review_diarization(transcript["segments"])
+            transcript["semantic_reviewed"] = True
+            transcriber.save_transcript(transcript, transcript_path)
+            # Invalidate translation cache since segment list and speaker assignments have changed
+            translated_transcript_path = project_dir / "transcript_translated.json"
+            if translated_transcript_path.exists():
+                logger.info("Invalidating translation cache due to diarization review updates.")
+                translated_transcript_path.unlink()
+            # Clear audio_segments cache to prevent mismatched index lookups
+            audio_segments_dir = project_dir / "audio_segments"
+            if audio_segments_dir.exists():
+                logger.info("Clearing cached audio segments due to segment index changes.")
+                for f in audio_segments_dir.glob("*.wav"):
+                    f.unlink()
+
         unique_speakers = sorted(
             {s.get("speaker") for s in transcript["segments"] if s.get("speaker")}
         )
