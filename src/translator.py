@@ -11,6 +11,49 @@ from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
+
+def extract_json_by_braces(text):
+    """
+    Robustly extract a JSON object from text by balancing curly braces.
+    Finds the first balanced brace block that parses as a JSON dict
+    containing corrections or splits.
+    """
+    for match in re.finditer(r"\{", text):
+        start_idx = match.start()
+        brace_count = 0
+        in_string = False
+        escape = False
+
+        for i in range(start_idx, len(text)):
+            char = text[i]
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if char == "{":
+                    brace_count += 1
+                elif char == "}":
+                    brace_count -= 1
+                    if brace_count == 0:
+                        candidate = text[start_idx : i + 1]
+                        try:
+                            data = json.loads(candidate)
+                            if isinstance(data, dict) and (
+                                "corrections" in data or "splits" in data
+                            ):
+                                return candidate
+                        except json.JSONDecodeError:
+                            pass
+                        break
+    return None
+
+
 VALID_EMOTIONS = {
     "[NEUTRAL]",
     "[WHISPER]",
@@ -560,13 +603,19 @@ class Translator:
             system_prompt = (
                 "You are a logic analyzer. Review the following dialogue transcript. "
                 "The acoustic diarization AI often misidentifies speakers or merges different speakers' dialogue "
-                "into a single segment (composite segments).\n"
-                "Review the conversational flow and identify:\n"
-                "1. Segment speaker corrections (e.g., if an entire segment is mislabeled).\n"
-                "2. Segment splits: if a single segment contains dialogue from multiple speakers (e.g., a question and an answer, or two characters calling each other's names), split the text into distinct parts, and assign the correct speaker to each part.\n\n"
+                "into a single segment (composite segments).\n\n"
+                "Japanese Honorifics & Addressing Rules:\n"
+                "In Japanese dialogue, speakers address each other using names + honorifics (e.g. '-kun' / 'くん' or 'クン', '-san' / 'さん' or 'サン', '-chan' / 'ちゃん' or 'チャン').\n"
+                "- A speaker NEVER addresses themselves by their own name/honorific (e.g. Asanagi-san will never call herself 'Asanagi-san' or 'Asanagi-chan'; Maehara-kun will never call himself 'Maehara-kun').\n"
+                "- If a speaker ID addresses someone using 'Maehara-kun' (前原くん), then that speaker ID CANNOT be Maehara-kun. That speaker ID is the other character (Umi Asanagi).\n"
+                "- If a speaker ID addresses someone using 'Asanagi-san' (朝乃木さん/アサナギさん), then that speaker ID CANNOT be Asanagi-san. That speaker ID is the other character (Maki Maehara).\n\n"
+                "Your Tasks:\n"
+                "1. Map Speaker IDs: In your <reasoning> block, first deduce which speaker ID corresponds to which character based on the names they call each other.\n"
+                "2. Segment speaker corrections: If an entire segment is mislabeled (e.g., a speaker addresses someone by their own name, or the conversation flow shows a segment belongs to the other character), correct the speaker label.\n"
+                "3. Segment splits: If a single segment contains dialogue from both speakers (e.g., 'ひどいよ、前原くん 朝乃木さん' or '朝乃木さん うん、うん、正解'), split the text into distinct parts and assign the correct speaker to each part.\n\n"
                 f"You MUST ONLY choose speaker labels from this list of valid speakers: {', '.join(valid_speakers)}.\n"
                 "Do NOT invent new speaker labels.\n"
-                "You MUST respond in two parts. First, write a brief <reasoning> block explaining the flow. "
+                "You MUST respond in two parts. First, write a brief <reasoning> block explaining your deductions. "
                 "Second, output a JSON object containing both 'corrections' and 'splits'.\n\n"
                 "Example response structure:\n"
                 "<reasoning>\n"
@@ -593,7 +642,7 @@ class Translator:
             )
 
             try:
-                # First attempt: Try with thinking enabled (limit of 4096 tokens)
+                # First attempt: Try with thinking disabled (much faster and avoids CPU timeout)
                 resp = self._chat_with_retry(
                     model=self.model,
                     messages=[
@@ -604,8 +653,9 @@ class Translator:
                         "temperature": 0.2,
                         "top_p": 0.95,
                         "num_ctx": self.num_ctx,
-                        "num_predict": 8192,
+                        "num_predict": 4096,
                     },
+                    think=False,
                 )
                 raw_content = resp["message"]["content"].strip()
 
@@ -639,13 +689,10 @@ class Translator:
                 elif "</think>" in content:
                     content = content.split("</think>")[-1].strip()
 
-                # Robustly extract JSON using regex, looking for corrections or splits structure
-                json_match = re.search(r'\{.*"(corrections|splits)".*\}', content, re.DOTALL)
-                if json_match:
-                    content = json_match.group(0)
-                elif "{" in content and "}" in content:
-                    # Fallback to basic extraction
-                    content = content[content.find("{") : content.rfind("}") + 1]
+                # Robustly extract JSON by balancing curly braces
+                extracted_json = extract_json_by_braces(content)
+                if extracted_json:
+                    content = extracted_json
                 else:
                     # No JSON found at all. The LLM ignored instructions. Fallback to empty.
                     logger.warning(

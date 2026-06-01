@@ -534,182 +534,212 @@ class BaseSynthesizer:
     def refine_speaker_assignments(self, audio_path, segments):
         """
         Second-pass diarization: use refined speaker centroids to re-verify labels
-        for every segment, fixing misattributions.
+        for every segment, fixing misattributions. Runs iteratively for 2 passes.
         """
         logger.info("Starting Diarization Refinement (Second Pass)...")
 
         audio = AudioSegment.from_wav(audio_path)
-
-        # 1. Group segments by speaker
-        speaker_segments = {}
-        for seg in segments:
-            spk = seg.get("speaker")
-            if spk:
-                if spk not in speaker_segments:
-                    speaker_segments[spk] = []
-                speaker_segments[spk].append(seg)
-
         import numpy as np
         from scipy.spatial.distance import cdist, cosine
 
-        # 2. Extract purified centroids for each speaker directly from segment audio
-        centroids = {}
-        for spk, spk_segs in speaker_segments.items():
-            # Filter for segments with reasonable duration
-            candidates = [s for s in spk_segs if (s.get("end", 0) - s.get("start", 0)) >= 1.5]
-            if len(candidates) < 2:
-                # Fallback to shorter segments if needed
-                candidates = [s for s in spk_segs if (s.get("end", 0) - s.get("start", 0)) >= 0.5]
+        # Local cache for segment embeddings to avoid recalculation in second iteration
+        segment_embs = {}
+        total_refined_count = 0
 
-            # Sort candidates by duration descending, take top 15
-            candidates.sort(key=lambda s: s.get("end", 0) - s.get("start", 0), reverse=True)
-            candidates = candidates[:15]
+        for iteration in range(2):
+            logger.info(f"Diarization Refinement Iteration {iteration + 1}/2...")
 
-            if not candidates:
-                continue
+            # 1. Group segments by speaker
+            speaker_segments = {}
+            for seg in segments:
+                spk = seg.get("speaker")
+                if spk:
+                    if spk not in speaker_segments:
+                        speaker_segments[spk] = []
+                    speaker_segments[spk].append(seg)
 
-            # Load audio clips and compute embeddings
-            clips = []
-            for seg in candidates:
-                start_ms = int(seg.get("start", 0) * 1000)
-                end_ms = int(seg.get("end", 0) * 1000)
-                clip = audio[start_ms:end_ms]
-                # Skip silent clips
-                if clip.dBFS <= -45:
+            # 2. Extract purified centroids for each speaker directly from segment audio
+            centroids = {}
+            for spk, spk_segs in speaker_segments.items():
+                # Filter for segments with reasonable duration
+                candidates = [s for s in spk_segs if (s.get("end", 0) - s.get("start", 0)) >= 1.5]
+                if len(candidates) < 2:
+                    # Fallback to shorter segments if needed
+                    candidates = [
+                        s for s in spk_segs if (s.get("end", 0) - s.get("start", 0)) >= 0.5
+                    ]
+
+                # Sort candidates by duration descending, take top 15
+                candidates.sort(key=lambda s: s.get("end", 0) - s.get("start", 0), reverse=True)
+                candidates = candidates[:15]
+
+                if not candidates:
                     continue
-                clips.append(clip)
 
-            if not clips:
-                continue
+                # Load audio clips and compute embeddings (using cache where possible)
+                clips_to_compute = []
+                clips_cached_embs = []
+                for seg in candidates:
+                    seg_key = (seg.get("start"), seg.get("end"))
+                    if seg_key in segment_embs:
+                        clips_cached_embs.append(segment_embs[seg_key])
+                    else:
+                        start_ms = int(seg.get("start", 0) * 1000)
+                        end_ms = int(seg.get("end", 0) * 1000)
+                        clip = audio[start_ms:end_ms]
+                        if clip.dBFS <= -45:
+                            continue
+                        clips_to_compute.append((seg_key, clip))
 
-            embs = self._get_embeddings(clips)
-            if embs is None:
-                continue
+                if clips_to_compute:
+                    embs = self._get_embeddings([c[1] for c in clips_to_compute])
+                    if embs is not None:
+                        for (seg_key, _), emb in zip(clips_to_compute, embs, strict=False):
+                            segment_embs[seg_key] = emb
+                            clips_cached_embs.append(emb)
 
-            # Purify embeddings using consensus check
-            if len(embs) >= 2:
-                dist_matrix = cdist(embs, embs, metric="cosine")
-                avg_distances = np.mean(dist_matrix, axis=1)
-                anchor_idx = np.argmin(avg_distances)
+                if not clips_cached_embs:
+                    continue
 
-                purified_embs = []
-                for idx, emb in enumerate(embs):
-                    dist = dist_matrix[anchor_idx, idx]
-                    if dist <= 0.35:
-                        purified_embs.append(emb)
+                embs = np.array(clips_cached_embs)
 
-                if purified_embs:
-                    centroids[spk] = np.mean(purified_embs, axis=0)
+                # Purify embeddings using consensus check
+                if len(embs) >= 2:
+                    dist_matrix = cdist(embs, embs, metric="cosine")
+                    avg_distances = np.mean(dist_matrix, axis=1)
+                    anchor_idx = np.argmin(avg_distances)
+
+                    purified_embs = []
+                    for idx, emb in enumerate(embs):
+                        dist = dist_matrix[anchor_idx, idx]
+                        if dist <= 0.35:
+                            purified_embs.append(emb)
+
+                    if purified_embs:
+                        centroids[spk] = np.mean(purified_embs, axis=0)
+                    else:
+                        centroids[spk] = np.mean(embs, axis=0)
                 else:
-                    centroids[spk] = np.mean(embs, axis=0)
-            else:
-                centroids[spk] = embs[0]
+                    centroids[spk] = embs[0]
 
-        if not centroids:
-            return segments
-
-        # 3. Identify duplicate speakers whose centroids are extremely close (< 0.38 cosine distance)
-        speaker_map = {spk: spk for spk in centroids}
-        spk_list = list(centroids.keys())
-        for idx1 in range(len(spk_list)):
-            for idx2 in range(idx1 + 1, len(spk_list)):
-                s1 = spk_list[idx1]
-                s2 = spk_list[idx2]
-                if s1 in centroids and s2 in centroids:
-                    dist = cosine(centroids[s1], centroids[s2])
-                    if dist < 0.38:
-                        logger.info(
-                            f"Acoustic Verification: Merging duplicate speakers {s1} and {s2} "
-                            f"(distance: {dist:.3f})"
-                        )
-                        # Resolve transitive mapping: find canonical s1
-                        canonical_s1 = s1
-                        while speaker_map[canonical_s1] != canonical_s1:
-                            canonical_s1 = speaker_map[canonical_s1]
-                        speaker_map[s2] = canonical_s1
-
-        # Consolidate centroids for merged speakers
-        new_centroids = {}
-        for spk, centroid in centroids.items():
-            curr = spk
-            while curr in speaker_map and speaker_map[curr] != curr:
-                curr = speaker_map[curr]
-            mapped_spk = curr
-            if mapped_spk not in new_centroids:
-                new_centroids[mapped_spk] = []
-            new_centroids[mapped_spk].append(centroid)
-
-        centroids = {spk: np.mean(embs, axis=0) for spk, embs in new_centroids.items()}
-
-        def get_canonical(spk):
-            if not spk:
-                return spk
-            curr = spk
-            while curr in speaker_map and speaker_map[curr] != curr:
-                curr = speaker_map[curr]
-            return curr
-
-        # Map initial speaker labels in segments
-        for seg in segments:
-            if seg.get("speaker"):
-                seg["speaker"] = get_canonical(seg["speaker"])
-
-        # 4. Re-verify every segment
-        refined_count = 0
-
-        for seg in segments:
-            start_ms = int(seg["start"] * 1000)
-            end_ms = int(seg["end"] * 1000)
-            if (end_ms - start_ms) < 500:  # Skip micro-segments for refinement
+            if not centroids:
                 continue
 
-            clip = audio[start_ms:end_ms]
-            # Get embedding for this specific line
-            seg_emb_arr = self._get_embeddings([clip])
-            if seg_emb_arr is None:
-                continue
-            seg_emb = seg_emb_arr[0]
+            # 3. Identify duplicate speakers whose centroids are extremely close (< 0.38 cosine distance)
+            speaker_map = {spk: spk for spk in centroids}
+            spk_list = list(centroids.keys())
+            for idx1 in range(len(spk_list)):
+                for idx2 in range(idx1 + 1, len(spk_list)):
+                    s1 = spk_list[idx1]
+                    s2 = spk_list[idx2]
+                    if s1 in centroids and s2 in centroids:
+                        dist = cosine(centroids[s1], centroids[s2])
+                        if dist < 0.38:
+                            logger.info(
+                                f"Acoustic Verification (Pass {iteration + 1}): Merging duplicate speakers {s1} and {s2} "
+                                f"(distance: {dist:.3f})"
+                            )
+                            # Resolve transitive mapping: find canonical s1
+                            canonical_s1 = s1
+                            while speaker_map[canonical_s1] != canonical_s1:
+                                canonical_s1 = speaker_map[canonical_s1]
+                            speaker_map[s2] = canonical_s1
 
-            # Find the closest centroid
-            curr_spk = seg.get("speaker")
-            best_spk = curr_spk
-            min_dist = float("inf")
-
-            distances = {}
+            # Consolidate centroids for merged speakers
+            new_centroids = {}
             for spk, centroid in centroids.items():
-                dist = cosine(seg_emb, centroid)
-                distances[spk] = dist
-                if dist < min_dist:
-                    min_dist = dist
-                    best_spk = spk
+                curr = spk
+                while curr in speaker_map and speaker_map[curr] != curr:
+                    curr = speaker_map[curr]
+                mapped_spk = curr
+                if mapped_spk not in new_centroids:
+                    new_centroids[mapped_spk] = []
+                new_centroids[mapped_spk].append(centroid)
 
-            # 5. Flip condition logic:
-            # - Reject flips if the closest match is itself a poor match (min_dist >= 0.48),
-            #   unless the current speaker is an extremely poor match (curr_dist >= 0.65) and the improvement is substantial (> 0.20)
-            # - Only flip if we are MUCH more certain about another speaker
-            # (threshold: 0.15 gap or original was very far > 0.45 with an improvement of at least 0.08)
-            curr_dist = distances.get(curr_spk, 1.0)
-            allow_flip = False
-            if best_spk != curr_spk:
-                is_significant_improvement = (curr_dist - min_dist) > 0.15 or (
-                    curr_dist > 0.45 and (curr_dist - min_dist) > 0.08
-                )
-                if is_significant_improvement and (
-                    (min_dist < 0.48)
-                    or (min_dist < 0.58 and curr_dist >= 0.65 and (curr_dist - min_dist) > 0.20)
-                ):
-                    allow_flip = True
+            centroids = {spk: np.mean(embs, axis=0) for spk, embs in new_centroids.items()}
 
-            if allow_flip:
-                logger.info(
-                    f"  Re-assigned segment {seg.get('start', 0):.1f}s: "
-                    f"{curr_spk} ({curr_dist:.2f}) -> {best_spk} ({min_dist:.2f})"
-                )
-                seg["speaker"] = best_spk
-                refined_count += 1
+            def get_canonical(spk, speaker_map=speaker_map):
+                if not spk:
+                    return spk
+                curr = spk
+                while curr in speaker_map and speaker_map[curr] != curr:
+                    curr = speaker_map[curr]
+                return curr
 
-        if refined_count > 0:
-            logger.info(f"Diarization Refinement complete. Fixed {refined_count} labels.")
+            # Map initial speaker labels in segments
+            for seg in segments:
+                if seg.get("speaker"):
+                    seg["speaker"] = get_canonical(seg["speaker"])
+
+            # 4. Re-verify every segment
+            iteration_refined_count = 0
+
+            for seg in segments:
+                start_ms = int(seg["start"] * 1000)
+                end_ms = int(seg["end"] * 1000)
+                if (end_ms - start_ms) < 500:  # Skip micro-segments for refinement
+                    continue
+
+                seg_key = (seg["start"], seg["end"])
+                if seg_key in segment_embs:
+                    seg_emb = segment_embs[seg_key]
+                else:
+                    clip = audio[start_ms:end_ms]
+                    # Get embedding for this specific line
+                    seg_emb_arr = self._get_embeddings([clip])
+                    if seg_emb_arr is None:
+                        continue
+                    seg_emb = seg_emb_arr[0]
+                    segment_embs[seg_key] = seg_emb
+
+                # Find the closest centroid
+                curr_spk = seg.get("speaker")
+                best_spk = curr_spk
+                min_dist = float("inf")
+
+                distances = {}
+                for spk, centroid in centroids.items():
+                    dist = cosine(seg_emb, centroid)
+                    distances[spk] = dist
+                    if dist < min_dist:
+                        min_dist = dist
+                        best_spk = spk
+
+                # 5. Flip condition logic:
+                # - Reject flips if the closest match is itself a poor match (min_dist >= 0.48),
+                #   unless the current speaker is an extremely poor match (curr_dist >= 0.65) and the improvement is substantial (> 0.15)
+                # - Only flip if we are MUCH more certain about another speaker
+                # (threshold: 0.15 gap or original was very far > 0.45 with an improvement of at least 0.08)
+                curr_dist = distances.get(curr_spk, 1.0)
+                allow_flip = False
+                if best_spk != curr_spk:
+                    is_significant_improvement = (curr_dist - min_dist) > 0.15 or (
+                        curr_dist > 0.45 and (curr_dist - min_dist) > 0.08
+                    )
+                    if is_significant_improvement and (
+                        (min_dist < 0.48)
+                        or (min_dist < 0.68 and curr_dist >= 0.65 and (curr_dist - min_dist) > 0.15)
+                        or (min_dist < 0.72 and curr_dist >= 0.80 and (curr_dist - min_dist) > 0.18)
+                    ):
+                        allow_flip = True
+
+                if allow_flip:
+                    logger.info(
+                        f"  [Pass {iteration + 1}] Re-assigned segment {seg.get('start', 0):.1f}s: "
+                        f"{curr_spk} ({curr_dist:.2f}) -> {best_spk} ({min_dist:.2f})"
+                    )
+                    seg["speaker"] = best_spk
+                    iteration_refined_count += 1
+
+            total_refined_count += iteration_refined_count
+            if iteration_refined_count == 0:
+                logger.info(f"Diarization Refinement converged at iteration {iteration + 1}.")
+                break
+
+        if total_refined_count > 0:
+            logger.info(
+                f"Diarization Refinement complete. Fixed {total_refined_count} labels in total."
+            )
 
         return segments
 
