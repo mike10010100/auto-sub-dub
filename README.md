@@ -136,8 +136,3 @@ See `AGENTS.md` for contributor guidelines and the quality-gate contract enforce
 - `src/transcriber.py`: Transcription and speaker diarization.
 - `src/translator.py`: Multimodal translation via Ollama.
 - `src/synthesizer.py`: Voice cloning and speed adjustment.
-ustment.
-lation, and ducking.
-- `src/transcriber.py`: Transcription and speaker diarization.
-- `src/translator.py`: Multimodal translation via Ollama.
-- `src/synthesizer.py`: Voice cloning and speed adjustment.
