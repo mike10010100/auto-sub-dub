@@ -116,8 +116,8 @@ with st.sidebar:
 
     semantic_review = st.checkbox(
         "Enable Semantic Diarization Review",
-        value=False,
-        help="Use Gemma 4 to logically review turn-taking. Disabled by default to prevent reference contamination.",
+        value=True,
+        help="Use Gemma 4 to logically review turn-taking. Enabled by default to correctly split and assign composite/back-and-forth dialogue segments.",
     )
 
     think_translation = st.checkbox(

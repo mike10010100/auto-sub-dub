@@ -79,7 +79,7 @@ def main(
     ollama_audio_model=None,
     engine="xtts",
     progress_callback=None,
-    semantic_review=False,
+    semantic_review=True,
     think_translation=False,
     **kwargs,
 ):  # pragma: no cover
@@ -539,8 +539,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--semantic-review",
         action="store_true",
-        help="Enable LLM-based semantic diarization review (disabled by default)",
+        dest="semantic_review",
+        help="Enable LLM-based semantic diarization review (enabled by default)",
     )
+    parser.add_argument(
+        "--no-semantic-review",
+        action="store_false",
+        dest="semantic_review",
+        help="Disable LLM-based semantic diarization review",
+    )
+    parser.set_defaults(semantic_review=True)
     parser.add_argument(
         "--think-translation",
         action="store_true",
