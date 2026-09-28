@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from pydub import AudioSegment
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Configure logging
 logging.basicConfig(
@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 # Silence SpeechBrain noise
 logging.getLogger("speechbrain").setLevel(logging.ERROR)
 
-from src.audio_processor import LANG_TO_ISO3, AudioProcessor, parse_srt
+from src.audio_processor import AudioProcessor, parse_ass, parse_srt, resolve_lang_iso3
+from src.comfy_client import ComfyClient
 from src.synthesizer import Synthesizer
 from src.timing import annotate_effective_windows  # noqa: E402,F401
 from src.transcriber import Transcriber
@@ -77,7 +78,10 @@ def main(
     ollama_url=None,
     ollama_model=None,
     ollama_audio_model=None,
-    engine="xtts",
+    comfyui_url=None,
+    engine="f5",
+    separator="roformer",
+    lipsync=False,
     progress_callback=None,
     semantic_review=True,
     think_translation=False,
@@ -106,33 +110,74 @@ def main(
 
     # Priority: argument > .env environment variable
     hf_token = hf_token or os.getenv("HF_TOKEN")
+    comfy_client = ComfyClient(base_url=comfyui_url or os.getenv("COMFYUI_URL"))
 
     audio_proc = AudioProcessor(output_dir=project_dir)
-    transcriber = Transcriber(device=device, hf_token=hf_token)
+    transcriber = Transcriber(device=device, hf_token=hf_token, comfy_client=comfy_client)
     translator = Translator(
         ollama_url=ollama_url, model=ollama_model, audio_model=ollama_audio_model
     )
-    synthesizer = Synthesizer(engine=engine, output_dir=audio_segments_dir, device=device)
+    synthesizer = Synthesizer(
+        engine=engine, output_dir=audio_segments_dir, device=device, comfy_client=comfy_client
+    )
 
     # 2. Process Audio
-    update_progress("Step 2: Isolating vocals and background audio (Demucs)...")
+    update_progress(f"Step 2: Isolating vocals and background audio ({separator})...")
     orig_audio = temp_dir / "original_audio.wav"
     if not orig_audio.exists():
         orig_audio = audio_proc.extract_audio(video_path)
     else:
         logger.info(f"Skipping audio extraction, using existing: {orig_audio}")
 
-    # Separate vocals (single HQ run for everything)
-    vocals = temp_dir / "htdemucs" / "original_audio" / "vocals.wav"
-    background = temp_dir / "htdemucs" / "original_audio" / "no_vocals.wav"
-
+    # Check for existing separation artifacts
+    sep_subdir = "htdemucs" if separator == "demucs" else separator
+    vocals = temp_dir / sep_subdir / "original_audio" / "vocals.wav"
+    background = temp_dir / sep_subdir / "original_audio" / "no_vocals.wav"
     if not vocals.exists() or not background.exists():
-        vocals, background = audio_proc.separate_vocals(orig_audio)
+        vocals, background = audio_proc.separate_vocals(
+            orig_audio, method=separator, comfy_client=comfy_client
+        )
     else:
         logger.info(f"Skipping vocal separation, using existing: {vocals}")
 
     # 3. Transcribe & Diarize
     transcript_path = project_dir / "transcript.json"
+    translated_transcript_path = project_dir / "transcript_translated.json"
+
+    # Check for ground-truth subtitle streams in the video container
+    sub_path = audio_proc.extract_target_subtitles(video_path, target_lang)
+    if sub_path and sub_path.exists():
+        if sub_path.suffix.lower() == ".ass":
+            sub_segs = parse_ass(sub_path, filter_signs=True)
+            is_ass = True
+        else:
+            sub_segs = parse_srt(sub_path)
+            is_ass = False
+
+        existing_seg_count = 0
+        if transcript_path.exists():
+            try:
+                with open(transcript_path, encoding="utf-8") as f:
+                    existing_seg_count = len(json.load(f).get("segments", []))
+            except Exception:
+                pass
+
+        if sub_segs and (not transcript_path.exists() or existing_seg_count < 100):
+            logger.info(
+                f"Adopting ground-truth {target_lang} subtitles ({len(sub_segs)} lines) "
+                f"for frame-accurate dialogue timing."
+            )
+            transcript = {
+                "segments": sub_segs,
+                "language": "en" if target_lang.lower().startswith("en") else "ja",
+                "from_subtitles": True,
+                "from_ass": is_ass,
+                "semantic_reviewed": True,
+            }
+            transcriber.save_transcript(transcript, transcript_path)
+            transcript["translated_segments"] = sub_segs
+            transcriber.save_transcript(transcript, translated_transcript_path)
+
     if not transcript_path.exists():
         update_progress("Step 3: Transcribing and identifying speakers (WhisperX)...")
         # Apply Vocal Focus filter to clean up isolated audio for better diarization
@@ -254,38 +299,38 @@ def main(
         audio_seg_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Verification Cycle: Diarization Refinement ---
-    update_progress("Step 5b: Re-verifying speaker assignments (Acoustic Verification)...")
-    # Use the purified speaker centroids directly from vocal boundaries to fix any mislabeled segments
-    # before we extract references.
-    translated_segments = synthesizer.refine_speaker_assignments(vocals, translated_segments)
+    if not transcript.get("from_ass"):
+        update_progress("Step 5b: Re-verifying speaker assignments (Acoustic Verification)...")
+        # Use the purified speaker centroids directly from vocal boundaries to fix any mislabeled segments
+        # before we extract references.
+        translated_segments = synthesizer.refine_speaker_assignments(vocals, translated_segments)
 
-    # Sync the refined speaker labels from translated_segments back to raw transcript["segments"]
-    # (so that references are extracted based on refined speakers!)
-    for i, trans_seg in enumerate(translated_segments):
-        if i < len(transcript.get("segments", [])):
-            raw_seg = transcript["segments"][i]
-            # Ensure the segments correspond (safety check)
-            if abs(raw_seg.get("start", 0) - trans_seg.get("start", 0)) < 0.1:
-                raw_seg["speaker"] = trans_seg.get("speaker")
-            else:
-                # Find matching segment by start time if index-based zip fails
-                for rs in transcript.get("segments", []):
-                    if abs(rs.get("start", 0) - trans_seg.get("start", 0)) < 0.1:
-                        rs["speaker"] = trans_seg.get("speaker")
-                        break
+        # Sync the refined speaker labels from translated_segments back to raw transcript["segments"]
+        # (so that references are extracted based on refined speakers!)
+        for i, trans_seg in enumerate(translated_segments):
+            if i < len(transcript.get("segments", [])):
+                raw_seg = transcript["segments"][i]
+                # Ensure the segments correspond (safety check)
+                if abs(raw_seg.get("start", 0) - trans_seg.get("start", 0)) < 0.1:
+                    raw_seg["speaker"] = trans_seg.get("speaker")
+                else:
+                    # Find matching segment by start time if index-based zip fails
+                    for rs in transcript.get("segments", []):
+                        if abs(rs.get("start", 0) - trans_seg.get("start", 0)) < 0.1:
+                            rs["speaker"] = trans_seg.get("speaker")
+                            break
 
-    # Save the refined transcripts back to cache so future runs/steps don't lose the refinement
-    transcriber.save_transcript(transcript, transcript_path)
-    if translated_transcript_path.exists():
-        transcriber.save_transcript(transcript, translated_transcript_path)
+        # Save the refined transcripts back to cache so future runs/steps don't lose the refinement
+        transcriber.save_transcript(transcript, transcript_path)
+        if translated_transcript_path.exists():
+            transcriber.save_transcript(transcript, translated_transcript_path)
 
     # 5. Extract Speaker References
     update_progress("Step 5: Extracting high-quality voice samples for cloning...")
     synthesizer.ref_audio_dir = project_dir / "references"
     synthesizer.ref_audio_dir.mkdir(parents=True, exist_ok=True)
-    # Increase to 5 clips and 5s min duration for a more robust vocal profile
     references = synthesizer.extract_speaker_references(
-        vocals, transcript, target_clips=5, min_duration=5
+        vocals, transcript, target_clips=5, min_duration=2.0
     )
 
     # 6. Synthesize & Place Audio
@@ -406,8 +451,8 @@ def main(
                 top_p=kwargs.get("tts_top_p", 0.8),
             )
 
-            # Apply Seed-VC Zero-Shot Skin (Identity Transfer)
-            if clip_path:
+            # Apply Seed-VC Zero-Shot Skin (Identity Transfer) only for engines that need it (fish)
+            if clip_path and engine == "fish":
                 clip_path = synthesizer.apply_seed_vc(
                     clip_path, speaker, references[speaker], emotion_tag
                 )
@@ -432,8 +477,10 @@ def main(
         dubbed_audio_track = dubbed_audio_track.overlay(segment_audio, position=start_ms)
 
     # 7. Mix with background and Remux
-    # Force .mp4 output for maximum compatibility across players
-    video_output_path = project_dir / f"dubbed_{Path(video_path).stem}.mp4"
+    input_suffix = Path(video_path).suffix.lower()
+    # Preserve .mkv or .webm container for lossless subtitle & font attachment support
+    output_ext = input_suffix if input_suffix in [".mkv", ".webm"] else ".mp4"
+    video_output_path = project_dir / f"dubbed_{Path(video_path).stem}{output_ext}"
 
     update_progress("Step 7: Mixing final track and remuxing video (FFmpeg)...")
     background_audio = AudioSegment.from_wav(background)
@@ -448,33 +495,43 @@ def main(
     # Choose audio and subtitle codecs based on extension
     audio_codec = "aac"
     subtitle_codec = "copy"
+    include_attachments = False
+
     if video_output_path.suffix.lower() == ".webm":
         audio_codec = "libopus"
+        subtitle_codec = "webvtt"
     elif video_output_path.suffix.lower() == ".mp4":
         # MP4 does not support ASS/SRT directly, must convert to mov_text
         subtitle_codec = "mov_text"
+    elif video_output_path.suffix.lower() == ".mkv":
+        include_attachments = True
 
     try:
-        # Determine source language ISO
-        src_iso = LANG_TO_ISO3.get(transcript.get("language", "Japanese"), "und")
-        tgt_iso = LANG_TO_ISO3.get(target_lang, "eng")
+        # Determine source and target language ISO 639-2 codes
+        src_iso = resolve_lang_iso3(transcript.get("language"), default="und")
+        tgt_iso = resolve_lang_iso3(target_lang, default="eng")
 
-        subprocess.run(
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video_path),
+            "-i",
+            str(final_audio_path),
+            "-map",
+            "0:v",  # Map original video
+            "-map",
+            "1:a",  # Map dubbed audio as Track 1 (a:0)
+            "-map",
+            "0:a",  # Map original audio as Track 2 (a:1)
+            "-map",
+            "0:s?",  # Map all original subtitles (optional match)
+        ]
+        if include_attachments:
+            cmd.extend(["-map", "0:t?"])
+
+        cmd.extend(
             [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(video_path),
-                "-i",
-                str(final_audio_path),
-                "-map",
-                "0:v",  # Map original video
-                "-map",
-                "1:a",  # Map dubbed audio as Track 1 (a:0)
-                "-map",
-                "0:a",  # Map original audio as Track 2 (a:1)
-                "-map",
-                "0:s?",  # Map all original subtitles (optional match)
                 "-c:v",
                 "copy",
                 "-c:a:0",
@@ -483,6 +540,13 @@ def main(
                 "copy",  # Keep original audio as-is
                 "-c:s",
                 subtitle_codec,  # Use compatible subtitle codec
+            ]
+        )
+        if include_attachments:
+            cmd.extend(["-c:t", "copy"])
+
+        cmd.extend(
+            [
                 "-metadata:s:a:0",
                 f"language={tgt_iso}",
                 "-metadata:s:a:0",
@@ -501,7 +565,11 @@ def main(
                 "0",  # Original is NOT default
                 "-shortest",
                 str(video_output_path),
-            ],
+            ]
+        )
+
+        subprocess.run(
+            cmd,
             check=True,
             capture_output=True,
             text=True,
@@ -511,6 +579,25 @@ def main(
         raise RuntimeError(
             f"FFmpeg failed during remuxing: {e.stderr if e.stderr else str(e)}"
         ) from e
+
+    # 8. Visual Lip-Syncing (LatentSync via ComfyUI)
+    if lipsync:
+        update_progress("Step 8: Re-animating mouth movements with LatentSync (ComfyUI)...")
+        lipsync_output_path = project_dir / f"dubbed_{Path(video_path).stem}_lipsynced.mp4"
+        if not lipsync_output_path.exists():
+            try:
+                comfy_client.lip_sync_video(
+                    video_path=video_output_path,
+                    audio_path=final_audio_path,
+                    output_path=lipsync_output_path,
+                )
+                logger.info(f"Lip-Syncing Complete! Final video: {lipsync_output_path}")
+                video_output_path = lipsync_output_path
+            except Exception as e:
+                logger.error(f"Lip-Syncing failed ({e}); retaining standard remuxed video.")
+        else:
+            logger.info(f"Skipping lip-syncing, using existing: {lipsync_output_path}")
+            video_output_path = lipsync_output_path
 
     logger.info(f"Auto-Dubbing Complete! Output: {video_output_path}")
 
@@ -529,8 +616,23 @@ if __name__ == "__main__":
         "--ollama_audio_model",
         help="Ollama model for audio-informed emotion tagging (e.g. gemma4:e4b)",
     )
+    parser.add_argument("--comfyui_url", help="ComfyUI instance URL")
     parser.add_argument(
-        "--engine", default="fish", choices=["xtts", "fish"], help="Synthesis engine to use"
+        "--engine",
+        default="cosy",
+        choices=["cosy", "f5", "fish", "xtts"],
+        help="Synthesis engine to use (cosy, f5, fish, xtts)",
+    )
+    parser.add_argument(
+        "--separator",
+        default="demucs",
+        choices=["demucs", "roformer"],
+        help="Vocal separation method (local demucs or roformer via ComfyUI)",
+    )
+    parser.add_argument(
+        "--lipsync",
+        action="store_true",
+        help="Enable LatentSync video lip synchronization via ComfyUI (disabled by default)",
     )
     parser.add_argument("--min_speakers", type=int, help="Minimum number of speakers")
     parser.add_argument("--max_speakers", type=int, help="Maximum number of speakers")
@@ -564,7 +666,10 @@ if __name__ == "__main__":
         ollama_url=args.ollama_url,
         ollama_model=args.ollama_model,
         ollama_audio_model=args.ollama_audio_model,
+        comfyui_url=args.comfyui_url,
         engine=args.engine,
+        separator=args.separator,
+        lipsync=args.lipsync,
         min_speakers=args.min_speakers,
         max_speakers=args.max_speakers,
         tts_temp=args.tts_temp,

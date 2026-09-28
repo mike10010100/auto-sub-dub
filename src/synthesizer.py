@@ -425,7 +425,7 @@ class BaseSynthesizer:
         vocals_path,
         transcript,
         target_clips=5,
-        min_duration=5,
+        min_duration=2.5,
         max_duration=20,
         trim_to=12.0,
         hq_vocals_path=None,
@@ -521,8 +521,12 @@ class BaseSynthesizer:
             for i, (score, clip, emotion, text, metrics) in enumerate(picked):
                 safe_emotion = emotion.strip("[]") or "NEUTRAL"
                 ref_path = spk_dir / f"ref_{i + 1}_{safe_emotion}.wav"
-                clip.export(ref_path, format="wav")
-                entries.append({"path": str(ref_path), "emotion": emotion, "text": text})
+                clean_clip = clip.fade_in(30).fade_out(30)
+                clean_clip.export(ref_path, format="wav")
+                clean_text = (text or "").strip()
+                if clean_text and not clean_text.endswith((".", "!", "?", "...", "…")):
+                    clean_text += "."
+                entries.append({"path": str(ref_path), "emotion": emotion, "text": clean_text})
 
             if entries:
                 references[speaker] = entries
@@ -1040,7 +1044,139 @@ class FishSynthesizer(BaseSynthesizer):
             return None
 
 
-def Synthesizer(engine="xtts", **kwargs):
-    if engine == "fish":
+class ComfyF5Synthesizer(BaseSynthesizer):
+    def __init__(self, output_dir="output/audio_segments", device=None, comfy_client=None):
+        super().__init__(output_dir, device)
+        from src.comfy_client import ComfyClient
+
+        self.client = comfy_client or ComfyClient()
+
+    def synthesize(
+        self,
+        text,
+        speaker_id,
+        speaker_refs,
+        output_filename,
+        language="en",
+        emotion=None,
+        speed=1.0,
+        **kwargs,
+    ):
+        output_path = self.output_dir / output_filename
+        valid_refs = [r for r in speaker_refs if r.get("text")]
+        primary_ref = valid_refs[0] if valid_refs else (speaker_refs[0] if speaker_refs else None)
+
+        if not primary_ref:
+            logger.error(f"No valid reference clips found for speaker {speaker_id}")
+            return None
+
+        ref_wav_path = primary_ref["path"]
+        ref_text = (primary_ref.get("text") or "Dialogue sample").strip()
+        if not ref_text.endswith((".", "!", "?", "...", "…")):
+            ref_text += "."
+
+        clean_speech = text.strip()
+        if not clean_speech.endswith((".", "!", "?", "...", "…")):
+            clean_speech += "."
+
+        try:
+            self.client.synthesize_speech_f5(
+                sample_audio_path=ref_wav_path,
+                sample_text=ref_text,
+                speech_text=clean_speech,
+                output_path=output_path,
+                speed=speed,
+                seed=kwargs.get("seed", 42),
+            )
+            # Ensure standard WAV format for downstream assembly
+            if output_path.exists() and output_path.suffix.lower() != ".wav":
+                wav_path = output_path.with_suffix(".wav")
+                audio = AudioSegment.from_file(output_path)
+                audio.export(wav_path, format="wav")
+                output_path.unlink()
+                output_path = wav_path
+            return output_path
+        except Exception as e:
+            logger.error(f"F5-TTS Synthesis failed on ComfyUI: {e}")
+            return None
+
+
+class ComfyCosyVoice3Synthesizer(BaseSynthesizer):
+    def __init__(self, output_dir="output/audio_segments", device=None, comfy_client=None):
+        super().__init__(output_dir, device)
+        from src.comfy_client import ComfyClient
+
+        self.client = comfy_client or ComfyClient()
+        self.base_ref = (Path(__file__).parent.parent / "assets" / "base_english_ref.wav").resolve()
+        self.base_ref_text = (
+            "In any classroom anywhere you go, you'll probably find people who can "
+            "light up the room with their smiles."
+        )
+
+    def synthesize(
+        self,
+        text,
+        speaker_id,
+        speaker_refs,
+        output_filename,
+        language="en",
+        emotion=None,
+        speed=1.0,
+        **kwargs,
+    ):
+        output_path = self.output_dir / output_filename
+        primary_ref = speaker_refs[0] if speaker_refs else None
+        if not primary_ref:
+            logger.error(f"No valid reference clips found for speaker {speaker_id}")
+            return None
+
+        clean_speech = text.strip()
+        if not clean_speech.endswith((".", "!", "?", "...", "…")):
+            clean_speech += "."
+
+        try:
+            # Step 1: Base English generation via F5-TTS on NMO
+            temp_base = self.output_dir / f"base_{output_filename}"
+            self.client.synthesize_speech_f5(
+                sample_audio_path=self.base_ref,
+                sample_text=self.base_ref_text,
+                speech_text=clean_speech,
+                output_path=temp_base,
+                speed=speed,
+                seed=kwargs.get("seed", 42),
+            )
+
+            # Step 2: Zero-Shot Timbre Transfer via CosyVoice 3 Voice Conversion on NMO
+            target_voice_clip = primary_ref["path"]
+            self.client.voice_convert_cosyvoice3(
+                source_audio_path=temp_base,
+                target_audio_path=target_voice_clip,
+                output_path=output_path,
+                speed=1.0,
+                seed=kwargs.get("seed", 42),
+            )
+
+            if temp_base.exists():
+                temp_base.unlink(missing_ok=True)
+
+            # Ensure standard WAV format for downstream assembly
+            if output_path.exists() and output_path.suffix.lower() != ".wav":
+                wav_path = output_path.with_suffix(".wav")
+                audio = AudioSegment.from_file(output_path)
+                audio.export(wav_path, format="wav")
+                output_path.unlink()
+                output_path = wav_path
+            return output_path
+        except Exception as e:
+            logger.error(f"CosyVoice 3 Synthesis failed on ComfyUI: {e}")
+            return None
+
+
+def Synthesizer(engine="cosy", **kwargs):
+    if engine in ("cosy", "cosyvoice", "cosyvoice3"):
+        return ComfyCosyVoice3Synthesizer(**kwargs)
+    elif engine == "f5":
+        return ComfyF5Synthesizer(**kwargs)
+    elif engine == "fish":
         return FishSynthesizer(**kwargs)
     return XTTSSynthesizer(**kwargs)

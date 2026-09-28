@@ -51,6 +51,20 @@ LANG_ALIASES = {
 }
 
 
+def resolve_lang_iso3(lang_str: str | None, default: str | None = "und") -> str | None:
+    """Resolve a language name, 2-letter code, or 3-letter code to ISO 639-2 (e.g. 'spa', 'eng')."""
+    if not lang_str:
+        return default
+    cleaned = lang_str.strip().lower()
+    for name, iso3 in LANG_TO_ISO3.items():
+        if name.lower() == cleaned:
+            return iso3
+    for iso3, aliases in LANG_ALIASES.items():
+        if cleaned == iso3 or cleaned in aliases:
+            return iso3
+    return default
+
+
 def _srt_time_to_seconds(ts):
     h, m, rest = ts.split(":")
     s, ms = rest.split(",")
@@ -88,6 +102,58 @@ def parse_srt(path):
     return entries
 
 
+def _ass_time_to_seconds(ts: str) -> float:
+    """Convert an ASS timestamp 'H:MM:SS.cs' to seconds."""
+    h, m, sec = ts.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(sec)
+
+
+def parse_ass(path, filter_signs: bool = True) -> list[dict]:
+    """Parse an ASS subtitle file into [{'start', 'end', 'speaker', 'text', 'style'}, ...]."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        data = f.read()
+    entries = []
+    for line in data.splitlines():
+        line = line.strip()
+        if not line.startswith("Dialogue:"):
+            continue
+        parts = line.split(",", 9)
+        if len(parts) < 10:
+            continue
+
+        start_str = parts[1].strip()
+        end_str = parts[2].strip()
+        style = parts[3].strip()
+        name = parts[4].strip()
+        raw_text = parts[9].strip()
+
+        if filter_signs and style.lower() in ("signs", "credits"):
+            continue
+
+        try:
+            start = round(_ass_time_to_seconds(start_str), 3)
+            end = round(_ass_time_to_seconds(end_str), 3)
+        except Exception:
+            continue
+
+        # Strip ASS formatting tags {\...} and line breaks \N
+        text = re.sub(r"\{[^}]*\}", "", raw_text)
+        text = text.replace(r"\N", " ").replace(r"\n", " ")
+        text = re.sub(r"\s+", " ", text).strip()
+
+        if text:
+            entries.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "speaker": name or "SPEAKER_00",
+                    "text": text,
+                    "style": style,
+                }
+            )
+    return entries
+
+
 class AudioProcessor:
     def __init__(self, output_dir="output"):
         self.output_dir = Path(output_dir)
@@ -115,9 +181,95 @@ class AudioProcessor:
         # Deprecated: use extract_audio
         return self.extract_audio(video_path)
 
-    def separate_vocals(self, audio_path):  # pragma: no cover  (demucs subprocess)
-        """Separates vocals from background audio using Demucs."""
-        logger.info(f"Separating vocals using Demucs for {audio_path}...")
+    def separate_vocals(
+        self, audio_path, method="roformer", comfy_client=None
+    ):  # pragma: no cover  (separation IO)
+        """Separates vocals from background audio using Mel-Band Roformer or Demucs."""
+        base_name = Path(audio_path).stem
+        if method == "roformer":
+            try:
+                from src.comfy_client import ComfyClient
+
+                client = comfy_client or ComfyClient()
+                if client.is_available():
+                    roformer_dir = self.temp_dir / "roformer" / base_name
+                    roformer_dir.mkdir(parents=True, exist_ok=True)
+                    vocals_target = roformer_dir / "vocals.wav"
+                    bg_target = roformer_dir / "no_vocals.wav"
+
+                    if vocals_target.exists() and bg_target.exists():
+                        logger.info(f"Using existing Roformer stems: {vocals_target}")
+                        return vocals_target, bg_target
+
+                    logger.info(f"Separating vocals using Mel-Band Roformer for {audio_path}...")
+                    vocals_raw, bg_raw = client.separate_audio(audio_path, output_dir=roformer_dir)
+
+                    # Ensure standard WAV format for downstream stages
+                    from pydub import AudioSegment
+
+                    if vocals_raw.suffix.lower() != ".wav":
+                        v_seg = AudioSegment.from_file(vocals_raw)
+                        v_seg.export(vocals_target, format="wav")
+                        vocals_raw.unlink(missing_ok=True)
+                    else:
+                        vocals_target = vocals_raw
+
+                    if bg_raw.suffix.lower() != ".wav":
+                        bg_seg = AudioSegment.from_file(bg_raw)
+                        bg_seg.export(bg_target, format="wav")
+                        bg_raw.unlink(missing_ok=True)
+                    else:
+                        bg_target = bg_raw
+
+                    return vocals_target, bg_target
+                else:
+                    logger.warning("ComfyUI not reachable for Roformer; falling back to Demucs.")
+            except Exception as e:
+                logger.warning(f"Roformer separation failed ({e}); falling back to Demucs.")
+
+        if method == "demucs":
+            try:
+                from src.comfy_client import ComfyClient
+
+                client = comfy_client or ComfyClient()
+                if client.is_available():
+                    demucs_dir = self.temp_dir / "htdemucs" / base_name
+                    demucs_dir.mkdir(parents=True, exist_ok=True)
+                    vocals_target = demucs_dir / "vocals.wav"
+                    bg_target = demucs_dir / "no_vocals.wav"
+
+                    if vocals_target.exists() and bg_target.exists():
+                        logger.info(f"Using existing Demucs stems: {vocals_target}")
+                        return vocals_target, bg_target
+
+                    logger.info(
+                        f"Separating vocals using CUDA Demucs on ComfyUI for {audio_path}..."
+                    )
+                    vocals_raw, bg_raw = client.separate_audio_demucs(
+                        audio_path, output_dir=demucs_dir
+                    )
+
+                    from pydub import AudioSegment
+
+                    if vocals_raw.suffix.lower() != ".wav":
+                        v_seg = AudioSegment.from_file(vocals_raw)
+                        v_seg.export(vocals_target, format="wav")
+                        vocals_raw.unlink(missing_ok=True)
+                    else:
+                        vocals_target = vocals_raw
+
+                    if bg_raw.suffix.lower() != ".wav":
+                        bg_seg = AudioSegment.from_file(bg_raw)
+                        bg_seg.export(bg_target, format="wav")
+                        bg_raw.unlink(missing_ok=True)
+                    else:
+                        bg_target = bg_raw
+
+                    return vocals_target, bg_target
+            except Exception as e:
+                logger.warning(f"ComfyUI CUDA Demucs failed ({e}); falling back to local Demucs.")
+
+        logger.info(f"Separating vocals using local Demucs for {audio_path}...")
         try:
             subprocess.run(
                 ["demucs", "--two-stems", "vocals", "-o", str(self.temp_dir), str(audio_path)],
@@ -127,7 +279,6 @@ class AudioProcessor:
             )
 
             # Demucs creates: output/temp/htdemucs/original_audio/vocals.wav
-            base_name = Path(audio_path).stem
             model_name = "htdemucs"
 
             vocals_path = self.temp_dir / model_name / base_name / "vocals.wav"
@@ -149,7 +300,7 @@ class AudioProcessor:
         Returns the SRT path if a matching stream was found and extracted,
         otherwise None.
         """
-        iso = LANG_TO_ISO3.get(target_lang)
+        iso = resolve_lang_iso3(target_lang, default=None)
         if not iso:
             logger.info(f"No ISO mapping for '{target_lang}'; skipping sub extraction.")
             return None
@@ -190,7 +341,10 @@ class AudioProcessor:
             logger.info(f"No '{target_lang}' ({iso}) subtitle stream found in source.")
             return None
 
-        out_path = self.temp_dir / f"subtitles_{iso}.srt"
+        is_ass = (match_codec or "").lower() == "ass"
+        ext = "ass" if is_ass else "srt"
+        out_path = self.temp_dir / f"subtitles_{iso}.{ext}"
+        codec_arg = "copy" if is_ass else "srt"
         logger.info(
             f"Extracting {target_lang} subtitle stream (index={match_idx}, codec={match_codec}) → {out_path}"
         )
@@ -206,7 +360,7 @@ class AudioProcessor:
                     "-map",
                     f"0:{match_idx}",
                     "-c:s",
-                    "srt",
+                    codec_arg,
                     str(out_path),
                 ],
                 check=True,

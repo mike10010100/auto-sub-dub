@@ -6,7 +6,9 @@ __pycache__/
 *.mp4
 *.mkv
 *.wav
+!assets/base_english_ref.wav
 !sample_video.mp4
+scratch/
 
 # Tooling artifacts
 .coverage

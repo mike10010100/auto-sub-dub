@@ -6,8 +6,11 @@ from src.audio_processor import (
     LANG_ALIASES,
     LANG_TO_ISO3,
     AudioProcessor,
+    _ass_time_to_seconds,
     _srt_time_to_seconds,
+    parse_ass,
     parse_srt,
+    resolve_lang_iso3,
 )
 
 
@@ -148,3 +151,68 @@ def test_lang_aliases_contain_primary_iso():
 def test_lang_to_iso3_has_aliases():
     for iso in LANG_TO_ISO3.values():
         assert iso in LANG_ALIASES, f"missing alias entry for {iso}"
+
+
+def test_resolve_lang_iso3():
+    # Names (case-insensitive)
+    assert resolve_lang_iso3("Spanish") == "spa"
+    assert resolve_lang_iso3("english") == "eng"
+    assert resolve_lang_iso3("JAPANESE") == "jpn"
+
+    # 2-letter ISO 639-1
+    assert resolve_lang_iso3("es") == "spa"
+    assert resolve_lang_iso3("en") == "eng"
+    assert resolve_lang_iso3("ja") == "jpn"
+    assert resolve_lang_iso3("fr") == "fra"
+
+    # 3-letter ISO 639-2
+    assert resolve_lang_iso3("spa") == "spa"
+    assert resolve_lang_iso3("eng") == "eng"
+
+    # None and empty
+    assert resolve_lang_iso3(None) == "und"
+    assert resolve_lang_iso3("", default="eng") == "eng"
+    assert resolve_lang_iso3("klingon", default="und") == "und"
+
+
+def test_ass_time_to_seconds():
+    assert _ass_time_to_seconds("0:00:06.39") == pytest.approx(6.39)
+    assert _ass_time_to_seconds("1:02:03.50") == pytest.approx(3723.50)
+
+
+def test_parse_ass_dialogue_basic(tmp_path):
+    ass = tmp_path / "subs.ass"
+    ass.write_text(
+        textwrap.dedent("""
+        [Events]
+        Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+        Dialogue: 0,0:00:06.39,0:00:08.28,Default,MAKI,0,0,0,,{\\i1}In any classroom, anywhere you go,
+        Dialogue: 0,0:00:14.63,0:00:17.63,Default,YUU,0,0,0,,{\\an8}I've been wanting to get \\Nmore exercise lately.
+        Dialogue: 0,0:00:33.35,0:00:37.02,Signs,SIGN,0,0,0,,{\\an7}HEY, MAEHARA
+        Dialogue: 0,0:00:33.35,0:00:37.02,Credits,CREDIT,0,0,0,,Song credit
+        Malformed line
+        Dialogue: 0,invalid,0:00:10.00,Default,MAKI,0,0,0,,Test
+    """)
+    )
+    entries = parse_ass(ass, filter_signs=True)
+    assert len(entries) == 2
+    assert entries[0]["speaker"] == "MAKI"
+    assert entries[0]["start"] == 6.39
+    assert entries[0]["end"] == 8.28
+    assert entries[0]["text"] == "In any classroom, anywhere you go,"
+    assert entries[1]["speaker"] == "YUU"
+    assert entries[1]["text"] == "I've been wanting to get more exercise lately."
+
+
+def test_parse_ass_dialogue_keep_signs(tmp_path):
+    ass = tmp_path / "subs.ass"
+    ass.write_text(
+        textwrap.dedent("""
+        [Events]
+        Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+        Dialogue: 0,0:00:33.35,0:00:37.02,Signs,SIGN,0,0,0,,HEY, MAEHARA
+    """)
+    )
+    entries = parse_ass(ass, filter_signs=False)
+    assert len(entries) == 1
+    assert entries[0]["speaker"] == "SIGN"

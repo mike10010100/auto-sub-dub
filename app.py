@@ -5,7 +5,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 # Load environment variables early
-load_dotenv()
+load_dotenv(override=True)
 
 import logging
 
@@ -83,25 +83,43 @@ with st.sidebar:
 
     ollama_url = st.text_input(
         "Ollama URL",
-        value=os.getenv("OLLAMA_URL", "http://192.168.86.172:11434"),
+        value=os.getenv("OLLAMA_URL", "http://nmo.purdlauski.net:11434"),
         help="The address of your local or remote Ollama instance",
     )
     ollama_model = st.text_input(
         "Ollama Translation Model",
         value=os.getenv("OLLAMA_MODEL", "gemma4:26b"),
-        help="Text translation model (e.g. gemma4:26b)",
+        help="Text translation model (e.g. gemma4:26b or gemma4:31b)",
     )
     ollama_audio_model = st.text_input(
         "Ollama Audio Model",
         value=os.getenv("OLLAMA_AUDIO_MODEL", "gemma4:e4b"),
         help="Audio-informed emotion tagging model. Must be an E-variant of Gemma 4 (e2b/e4b).",
     )
+    comfyui_url = st.text_input(
+        "ComfyUI URL",
+        value=os.getenv("COMFYUI_URL", "http://nmo.purdlauski.net:8188"),
+        help="The address of the ComfyUI backend for F5-TTS, Roformer, and LatentSync",
+    )
+
+    separator = st.selectbox(
+        "Vocal Isolation",
+        ["roformer", "demucs"],
+        index=0,
+        help="roformer: Mel-Band Roformer via ComfyUI (studio-quality vocal isolation). demucs: Local Meta Demucs fallback.",
+    )
 
     engine = st.selectbox(
         "Synthesis Engine",
-        ["xtts", "fish"],
-        index=1,
-        help="fish (default): High-fidelity (44.1kHz) with zero-accent Seed-VC timbre transfer. xtts: Legacy fast zero-shot cloning (24kHz).",
+        ["f5", "fish", "xtts"],
+        index=0,
+        help="f5 (recommended): Flow Matching diffusion on ComfyUI. fish: High-fidelity with Seed-VC skin. xtts: Legacy zero-shot cloning.",
+    )
+
+    lipsync = st.checkbox(
+        "Enable LatentSync Lip-Syncing",
+        value=False,
+        help="Re-animate video mouth movements to match the dubbed audio via LatentSync on ComfyUI.",
     )
 
     col1, col2 = st.columns(2)
@@ -137,6 +155,7 @@ with st.sidebar:
     os.environ["OLLAMA_URL"] = ollama_url
     os.environ["OLLAMA_MODEL"] = ollama_model
     os.environ["OLLAMA_AUDIO_MODEL"] = ollama_audio_model
+    os.environ["COMFYUI_URL"] = comfyui_url
 
     st.divider()
     st.info(f"Optimal hardware: **{auto_device.upper()}**")
@@ -188,7 +207,10 @@ if uploaded_file is not None:
                     ollama_url=ollama_url,
                     ollama_model=ollama_model,
                     ollama_audio_model=ollama_audio_model,
+                    comfyui_url=comfyui_url,
                     engine=engine,
+                    separator=separator,
+                    lipsync=lipsync,
                     min_speakers=int(min_speakers),
                     max_speakers=int(max_speakers),
                     tts_temp=float(tts_temp),

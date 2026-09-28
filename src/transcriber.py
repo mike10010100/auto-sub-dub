@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 class Transcriber:
-    def __init__(self, device=None, compute_type=None, hf_token=None):
+    def __init__(self, device=None, compute_type=None, hf_token=None, comfy_client=None):
+        self.comfy_client = comfy_client
         requested_device = device or get_device()
 
         # WhisperX fix: ctranslate2 doesn't support MPS
@@ -32,7 +33,25 @@ class Transcriber:
 
     def transcribe(self, audio_path, batch_size=16, min_speakers=None, max_speakers=None):
         """Transcribes the audio and performs speaker diarization."""
-        logger.info(f"Transcribing {audio_path}...")
+        if self.comfy_client and self.comfy_client.is_available():
+            try:
+                logger.info(f"Transcribing {audio_path} using CUDA WhisperX on ComfyUI...")
+                res = self.comfy_client.transcribe_whisperx(
+                    audio_path,
+                    model_type="large-v3",
+                    batch_size=8,
+                    if_mutiple_speaker=True,
+                    auth_token=self.hf_token,
+                )
+                if res.get("segments"):
+                    logger.info(
+                        f"ComfyUI WhisperX transcription complete: {len(res['segments'])} segments."
+                    )
+                    return res
+            except Exception as e:
+                logger.warning(f"ComfyUI WhisperX failed ({e}); falling back to local WhisperX.")
+
+        logger.info(f"Transcribing {audio_path} locally on {self.device}...")
 
         # 1. Transcribe with original whisper
         # Use a smaller chunk size and enable native word timestamps for better overlap handling
@@ -49,11 +68,12 @@ class Transcriber:
         audio = whisperx.load_audio(str(audio_path))
         # chunk_size=10 is aggressive but essential for fast-paced overlapping dialogue
         result = model.transcribe(audio, batch_size=batch_size, chunk_size=10)
+        detected_language = result.get("language")
 
         # 2. Align whisper output
         logger.info("Aligning transcription...")
         model_a, metadata = whisperx.load_align_model(
-            language_code=result["language"], device=self.device
+            language_code=detected_language, device=self.device
         )
         result = whisperx.align(
             result["segments"],
@@ -63,6 +83,7 @@ class Transcriber:
             self.device,
             return_char_alignments=False,
         )
+        result["language"] = detected_language
 
         # 3. Assign speaker labels
         logger.info("Performing speaker diarization...")
