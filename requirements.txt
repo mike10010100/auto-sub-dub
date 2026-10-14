@@ -2,7 +2,7 @@ ollama
 TTS
 ffmpeg-python
 demucs
-hydra-core>=1.3.2
+hydra-core>=1.3.7
 whisperx
 pydub
 audiotsm
@@ -10,7 +10,7 @@ requests
 torch==2.14.1
 torchvision==0.29.1
 torchaudio==2.11.0
-numpy<2.0.0
+numpy<3.0.0
 setuptools
 tqdm
 streamlit
@@ -19,5 +19,5 @@ python-dotenv
 pyloudnorm
 huggingface-hub
 pyphen
-transformers<4.45.0
-nvidia-cudnn-cu11==8.9.6.50
+transformers<5.20.0
+nvidia-cudnn-cu11==9.10.2.21

@@ -1,5 +1,5 @@
 # Use NVIDIA CUDA base image
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+FROM nvidia/cuda:13.4.2-devel-ubuntu22.04
 
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -46,7 +46,7 @@ RUN git clone https://github.com/Plachtaa/seed-vc.git \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir pyphen
-RUN pip install --no-cache-dir --upgrade "hydra-core>=1.3.2" "protobuf>=3.20"
+RUN pip install --no-cache-dir --upgrade "hydra-core>=1.3.7" "protobuf>=3.20"
 
 # Add pip-installed cuDNN to LD_LIBRARY_PATH so WhisperX (CTranslate2) can find libcudnn_ops_infer.so.8
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}
