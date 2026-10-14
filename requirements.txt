@@ -19,5 +19,5 @@ python-dotenv
 pyloudnorm
 huggingface-hub
 pyphen
-transformers<4.45.0
+transformers<5.20.0
 nvidia-cudnn-cu11==8.9.6.50
