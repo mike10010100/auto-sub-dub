@@ -20,4 +20,4 @@ pyloudnorm
 huggingface-hub
 pyphen
 transformers<4.45.0
-nvidia-cudnn-cu11==8.9.6.50
+nvidia-cudnn-cu11==9.10.2.21
