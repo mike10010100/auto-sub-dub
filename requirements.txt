@@ -7,9 +7,9 @@ whisperx
 pydub
 audiotsm
 requests
-torch==2.4.0
-torchvision==0.19.0
-torchaudio==2.4.0
+torch==2.14.1
+torchvision==0.29.1
+torchaudio==2.11.0
 numpy<2.0.0
 setuptools
 tqdm
