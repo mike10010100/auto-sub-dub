@@ -1,5 +1,5 @@
 # Use NVIDIA CUDA base image
-FROM nvidia/cuda:13.4.3-devel-ubuntu22.04
+FROM nvidia/cuda:13.5.0-devel-ubuntu22.04
 
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
